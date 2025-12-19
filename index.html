@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Cat Muzzle Overlay</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Cat Muzzle AI</h1>
+            <p>画像または動画をアップロードして猫に変身</p>
+        </header>
+
+        <div class="upload-section">
+            <input type="file" id="fileInput" accept="image/*,video/*" hidden>
+            <button class="btn primary" onclick="document.getElementById('fileInput').click()">
+                ファイルを選択（画像/動画）
+            </button>
+            <div id="status" class="status">モデルを読み込み中...</div>
+        </div>
+
+        <div class="preview-area">
+            <div id="loadingOverlay" class="overlay" style="display:none;">
+                <div class="spinner"></div>
+                <p>処理中...</p>
+            </div>
+            <canvas id="outputCanvas"></canvas>
+            <video id="hiddenVideo" playsinline style="display:none;"></video>
+        </div>
+
+        <div class="action-area" id="actionArea" style="display:none;">
+            <button id="downloadBtn" class="btn success">結果をダウンロード</button>
+            <button class="btn secondary" onclick="location.reload()">もう一度</button>
+        </div>
+    </div>
+
+    <!-- MediaPipe Tasks Vision Library -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/vision_bundle.js" crossorigin="anonymous"></script>
+    <script type="module" src="app.js"></script>
+</body>
+</html>
