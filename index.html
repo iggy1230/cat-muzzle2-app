@@ -3,175 +3,162 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Cat Muzzle AI - Debug Mode</title>
+    <title>Cat Muzzle AI - 3D Perspective</title>
     <style>
-        body { font-family: sans-serif; background: #f0f2f5; display: flex; justify-content: center; padding: 20px; }
-        .card { background: white; padding: 24px; border-radius: 16px; box-shadow: 0 8px 30px rgba(0,0,0,0.1); width: 100%; max-width: 600px; text-align: center; }
-        #log { margin: 10px 0; padding: 10px; background: #333; color: #0f0; font-family: monospace; font-size: 12px; border-radius: 5px; text-align: left; height: 100px; overflow-y: auto; }
-        .preview-box { position: relative; width: 100%; background: #eee; border-radius: 12px; margin-top: 15px; min-height: 200px; }
-        canvas { max-width: 100%; height: auto; border-radius: 12px; }
-        .btn { padding: 14px 28px; background: #6200ee; color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 16px; width: 100%; margin-bottom: 10px; }
-        .btn:disabled { background: #ccc; cursor: wait; }
+        body { font-family: sans-serif; background: #1a1a1a; color: #fff; display: flex; justify-content: center; padding: 20px; margin: 0; }
+        .card { background: #2d2d2d; padding: 25px; border-radius: 20px; box-shadow: 0 10px 40px rgba(0,0,0,0.5); width: 100%; max-width: 600px; text-align: center; }
+        #log { margin: 15px 0; padding: 12px; background: #000; color: #00ff00; font-family: monospace; font-size: 11px; border-radius: 8px; text-align: left; height: 100px; overflow-y: auto; white-space: pre-wrap; border: 1px solid #444; }
+        .preview-box { position: relative; width: 100%; background: #000; border-radius: 12px; margin-top: 15px; border: 2px solid #444; overflow: hidden; }
+        canvas { max-width: 100%; height: auto; display: block; margin: 0 auto; }
+        .btn { padding: 16px 32px; background: #7c4dff; color: white; border: none; border-radius: 10px; cursor: pointer; font-size: 16px; font-weight: bold; width: 100%; margin-bottom: 10px; }
+        .btn:disabled { background: #444; cursor: wait; opacity: 0.6; }
     </style>
-    <!-- ライブラリを確実に読み込む -->
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/vision_bundle.js" crossorigin="anonymous"></script>
 </head>
 <body>
     <div class="card">
-        <h2>🐱 猫マズル合成 (安定版)</h2>
-        <div id="log">ログ: エンジン起動を待機中...</div>
+        <h2>🐱 CAT MUZZLE AI (3D Perspective)</h2>
+        <div id="log">ログ: システム起動中...</div>
         
         <input type="file" id="fileInput" accept="image/*,video/*" hidden>
-        <button id="uploadBtn" class="btn" disabled>エンジン読み込み中...</button>
-        <button id="dlBtn" class="btn" style="background:#03dac6; color:#000; display:none;">画像を保存する</button>
+        <button id="uploadBtn" class="btn" disabled>読み込み中...</button>
 
         <div class="preview-box">
             <canvas id="canvas"></canvas>
-            <video id="video" playsinline hidden></video>
+            <video id="video" playsinline muted style="display:none;"></video>
         </div>
     </div>
 
-    <script>
-        const logArea = document.getElementById('log');
-        function addLog(msg) {
-            logArea.innerHTML += `> ${msg}<br>`;
-            logArea.scrollTop = logArea.scrollHeight;
-            console.log(msg);
-        }
+    <script type="module">
+        import { FaceLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3";
 
-        let faceLandmarker;
         const canvas = document.getElementById('canvas');
         const ctx = canvas.getContext('2d');
         const video = document.getElementById('video');
         const fileInput = document.getElementById('fileInput');
         const uploadBtn = document.getElementById('uploadBtn');
-        const dlBtn = document.getElementById('dlBtn');
+        const logArea = document.getElementById('log');
 
-        // シンプルな猫の鼻（Base64）
-        const muzzleImg = new Image();
-        muzzleImg.src = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAGQAAABkCAYAAABw4pVUAAAACXBIWXMAAAsTAAALEwEAmpwYAAADXklEQVR4nO2dS24TQRCGP8MYI8mCyA0SByBCOAtH4S4sgSByAs4SByBEnSByAs6SByAsnSByAs4SByAknSDJAicS78LIsmS7Z7p7qqfH6reSNo9X9Vf1V01399BCoVCoVCqVSpXGNoA9YAt4BbwArvK6D7wC9uY6XpDWAXvAnS9v/Hl16T9NAdp0C7gD3unfX096rIBtAF/076+nvYmX6K3989vST0E/0Vv7569KnwN9pX9+Tfrv6E308+uS0pvg5f6N7unfTToS+Ar84v9X9G9WpZ0S6Vv9G8vS7iPpx/0bR6X9Uul7/Rvr0m4g6Z7+zVHpV6S/07+xKe17kr7Wv7Ep7TqSrtK/uSrtM9LH9G96pf1A+pj+Ta+0f0gf07/plfYL6WP6N73SrqR/H73v0z8vSrtIurR/m9F2Anynf76v9DHp0v5tRtsW8IP++anSV6RL+7cZbUfAL/rn16SrkS7t32a07SAnvD/SdfP6qfR3pEv7txltY97f6Xp6vC/9Wul3pEv7txltd8B7vVp3unE6R9p30Uv7txntAfBAX9vOnPZp9NL+bUab8p34on9+TvoV6dL+bUbbpZf30W9vSvoZ6dL+bUZbV87N7+lfD0q/IF3av81oO86p+T39637pI9Kl/duMtmvgV87X7+lf90uX9m8z2i7UfO3R8v9XpEv7txltK8AnuS6XpY9Jl/ZvM9pUvYf0L5alX5Eu7d9mtN2reU6/uSrtIunS/m1Gu9PrX77Xv3ksfUy6tH+b0XatXv/V7vRvHksfky7t32a0Oa/v6V8XSR+TLu3fZrT9Bv6o6fN7+te90sekS/u3GW3f9G8vS/uepEv7txltW2J7+reD0j4nXdG/GW3Xoov0bwvSz0iX9m8z2i7lXPyZ/u2gtM9Il/ZvM9ou5Vz8mf7toLTPSJf2bTPaluX8/Jn+db/0X6RL+7YZbd/y6V/3Sv9FurRvm9F2LqL0rxvS/5Eu7dtmtD0Cnun30Yf696vSv5Eu7dtmtD0W677+fVn6N9KlfduMthNxl9LvpX8lXdq3zWgbAn88/UvX0r9OlfZtM9qU95K+l3QeStv/5v9C59/9uS6VSqVSqVQqlfL7B4r9M7T9Tf7mAAAAAElFTkSuQmCC";
+        function addLog(msg) {
+            logArea.innerText += `> ${msg}\n`;
+            logArea.scrollTop = logArea.scrollHeight;
+        }
+
+        let faceLandmarker;
+        let muzzleImg = new Image();
+        let muzzleReady = false;
+
+        muzzleImg.src = "muzzle.png";
+        muzzleImg.onload = () => { muzzleReady = true; addLog("muzzle.png 読込完了"); };
 
         async function init() {
             try {
-                addLog("WASMリゾルバーを読み込み中...");
-                const vision = await mpVision.FilesetResolver.forVisionTasks(
-                    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm"
-                );
-                
-                addLog("AIモデル(80MB)をロード中...（時間がかかる場合があります）");
-                faceLandmarker = await mpVision.FaceLandmarker.createFromOptions(vision, {
+                const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm");
+                faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
                     baseOptions: {
                         modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
-                        delegate: "CPU" // 安定性のためCPUを使用
+                        delegate: "GPU"
                     },
-                    runningMode: "IMAGE",
-                    numFaces: 2
+                    runningMode: "VIDEO",
+                    numFaces: 2,
+                    minFaceDetectionConfidence: 0.3, // 検出感度を最大化
+                    minTrackingConfidence: 0.3
                 });
-
-                addLog("準備完了！");
-                uploadBtn.innerText = "画像・動画を選択";
+                addLog("AIエンジン準備完了");
                 uploadBtn.disabled = false;
+                uploadBtn.innerText = "写真・動画を選択";
                 uploadBtn.onclick = () => fileInput.click();
-            } catch (e) {
-                addLog("致命的エラー: " + e.message);
-                console.error(e);
-            }
+            } catch (e) { addLog("エラー: " + e.message); }
         }
 
-        fileInput.onchange = async (e) => {
+        fileInput.onchange = (e) => {
             const file = e.target.files[0];
             if (!file) return;
-            
-            addLog(`ファイル受信: ${file.name} (${file.type})`);
             const url = URL.createObjectURL(file);
-            dlBtn.style.display = 'none';
-
             if (file.type.startsWith('image/')) {
-                processImage(url);
+                const img = new Image();
+                img.onload = async () => {
+                    canvas.width = img.width; canvas.height = img.height;
+                    ctx.drawImage(img, 0, 0);
+                    const results = await faceLandmarker.detect(img);
+                    if (results.faceLandmarks) results.faceLandmarks.forEach(drawMuzzle3D);
+                };
+                img.src = url;
             } else {
-                processVideo(url);
+                video.src = url;
+                video.onloadedmetadata = () => {
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
+                    video.play();
+                    renderVideo();
+                };
             }
         };
 
-        async function processImage(url) {
-            addLog("画像をデコード中...");
-            const img = new Image();
-            img.src = url;
-            await img.decode();
-
-            // リサイズ処理（メモリ対策）
-            const max = 1024;
-            let w = img.width, h = img.height;
-            if (w > max || h > max) {
-                const s = max / Math.max(w, h);
-                w *= s; h *= s;
-            }
-            canvas.width = w; canvas.height = h;
-            
-            addLog("AI解析実行中...");
-            await faceLandmarker.setOptions({ runningMode: "IMAGE" });
-            
-            // タイムアウト付きで実行
-            const results = await faceLandmarker.detect(img);
-            
-            ctx.drawImage(img, 0, 0, w, h);
-            if (results.faceLandmarks && results.faceLandmarks.length > 0) {
-                addLog(`${results.faceLandmarks.length}人の顔を検出。マズルを合成します。`);
-                results.faceLandmarks.forEach(drawMuzzle);
-                addLog("完了！");
-                dlBtn.style.display = 'block';
-                dlBtn.onclick = () => {
-                    const a = document.createElement('a');
-                    a.download = 'result.png';
-                    a.href = canvas.toDataURL();
-                    a.click();
-                };
-            } else {
-                addLog("警告: 顔が検出されませんでした。正面を向いた画像をお試しください。");
-            }
-        }
-
-        async function processVideo(url) {
-            addLog("動画の準備中...");
-            video.src = url;
-            await video.load();
-            video.onloadedmetadata = () => {
-                canvas.width = video.videoWidth;
-                canvas.height = video.videoHeight;
-                addLog("動画解析を開始します。再生終了までお待ちください。");
-                video.play();
-                renderVideo();
-            };
-        }
-
         async function renderVideo() {
-            if (video.paused || video.ended) {
-                addLog("動画処理が終了しました。");
-                return;
-            }
-            await faceLandmarker.setOptions({ runningMode: "VIDEO" });
+            if (video.paused || video.ended) return;
             const results = faceLandmarker.detectForVideo(video, performance.now());
-            
             ctx.drawImage(video, 0, 0);
-            if (results.faceLandmarks) {
-                results.faceLandmarks.forEach(drawMuzzle);
+            if (muzzleReady && results.faceLandmarks) {
+                results.faceLandmarks.forEach(drawMuzzle3D);
             }
             requestAnimationFrame(renderVideo);
         }
 
-        function drawMuzzle(landmarks) {
-            const nose = landmarks[4];
-            const eyeL = landmarks[33], eyeR = landmarks[263];
-            const jawL = landmarks[234], jawR = landmarks[454];
+        // --- 改善された3D描画ロジック ---
+        function drawMuzzle3D(landmarks) {
+            const noseTip = landmarks[4];      // 鼻先
+            const noseBridge = landmarks[1];   // 鼻根（目と目の間）
+            const jawL = landmarks[234];       // 左頬
+            const jawR = landmarks[454];       // 右頬
+            const eyeL = landmarks[33];
+            const eyeR = landmarks[263];
 
-            const faceWidth = Math.hypot(jawR.x - jawL.x, jawR.y - jawL.y) * canvas.width;
+            // 1. 横を向いている度合い（Yaw）を推定
+            // 鼻が顔の中心線からどれだけズレているかを計算
+            const centerX = (jawL.x + jawR.x) / 2;
+            const faceWidth2D = Math.abs(jawR.x - jawL.x);
+            // ヨコ向き係数 (-1.0 〜 1.0)
+            const yawFactor = (noseTip.x - centerX) / (faceWidth2D / 2);
+
+            // 2. 奥行き（Z）を考慮したスケール算出
+            // 横を向いても変化しにくい「顔の3D幅」を擬似的に算出
+            const faceWidth3D = Math.hypot(jawR.x - jawL.x, jawR.z - jawL.z) * canvas.width;
+            
+            // 3. 回転角（Roll）
             const angle = Math.atan2(eyeR.y - eyeL.y, eyeR.x - eyeL.x);
-            const size = faceWidth * 0.5;
 
+            // 4. パース補正を適用したサイズ設定
+            const aspectRatio = muzzleImg.width / muzzleImg.height;
+            const baseSize = faceWidth3D * 0.75;
+            
+            // 顔が横を向くほど横幅を圧縮 (cos近似)
+            const squeezeFactor = Math.max(0.2, Math.cos(yawFactor * (Math.PI / 2.5)));
+            const targetWidth = baseSize * squeezeFactor;
+            const targetHeight = baseSize / aspectRatio;
+
+            // 5. 描画
             ctx.save();
-            ctx.translate(nose.x * canvas.width, nose.y * canvas.height);
+            
+            // 鼻先にアンカーを置く
+            const x = noseTip.x * canvas.width;
+            const y = noseTip.y * canvas.height;
+            ctx.translate(x, y);
+            
+            // 顔の傾き
             ctx.rotate(angle);
-            ctx.drawImage(muzzleImg, -size/2, -size/2, size, size);
+
+            // 横を向いている方向にマズルを少しシフト（立体的な鼻の厚みを表現）
+            const xOffset = (yawFactor * baseSize * 0.1);
+
+            ctx.globalAlpha = 0.95; // 馴染みを良くするために少し透過
+            ctx.drawImage(
+                muzzleImg, 
+                -targetWidth / 2 + xOffset, 
+                -targetHeight / 2 + (targetHeight * 0.1), 
+                targetWidth, 
+                targetHeight
+            );
+            
             ctx.restore();
         }
 

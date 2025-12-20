@@ -1,138 +1,64 @@
-import { FaceLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/vision_bundle.js";
+// --- 手前側の小鼻を隠すための強化版3D描画ロジック ---
+function drawMuzzle3D(landmarks) {
+    if (!muzzleReady) return;
 
-const fileInput = document.getElementById('fileInput');
-const canvas = document.getElementById('outputCanvas');
-const ctx = canvas.getContext('2d');
-const video = document.getElementById('hiddenVideo');
-const status = document.getElementById('status');
-const loadingOverlay = document.getElementById('loadingOverlay');
-const actionArea = document.getElementById('actionArea');
-const downloadBtn = document.getElementById('downloadBtn');
+    const noseTip = landmarks[4];      // 鼻先
+    const jawL = landmarks[234];       // 左頬
+    const jawR = landmarks[454];       // 右頬
+    const eyeL = landmarks[33];
+    const eyeR = landmarks[263];
 
-let faceLandmarker;
-let muzzleImg = new Image();
-// 代替用の猫マズルBase64画像（透過PNG）
-muzzleImg.src = "https://raw.githubusercontent.com/google/mediapipe/master/mediapipe/modules/face_geometry/data/face_paint_texture.png"; 
-// ※実際にはより適切な猫のマズル透過PNGを muzzle.png として用意し、そちらを指定してください。
+    // 1. 顔の向き（Yaw）の計算: -1.0 (左向き) ～ 1.0 (右向き)
+    const faceCenterX = (jawL.x + jawR.x) / 2;
+    const faceWidth2D = Math.abs(jawR.x - jawL.x);
+    const yawFactor = (noseTip.x - faceCenterX) / (faceWidth2D / 2);
 
-// 1. モデルの初期化
-async function setupModel() {
-    const filesetResolver = await FilesetResolver.forVisionTasks(
-        "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/wasm"
-    );
-    faceLandmarker = await FaceLandmarker.createFromOptions(filesetResolver, {
-        baseOptions: {
-            modelAssetPath: `https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task`,
-            delegate: "GPU"
-        },
-        runningMode: "VIDEO",
-        numFaces: 2
-    });
-    status.innerText = "モデル準備完了。画像または動画を選択してください。";
-}
-
-// 2. マズルの描画
-function drawMuzzle(landmarks) {
-    // 鼻の中心 (Landmark 4)
-    const nose = landmarks[4];
-    // 顔のスケール算出 (両頬の距離)
-    const jawRight = landmarks[234];
-    const jawLeft = landmarks[454];
-    const faceWidth = Math.hypot(jawLeft.x - jawRight.x, jawLeft.y - jawRight.y) * canvas.width;
+    // 2. 3Dスケール（奥行きを考慮した絶対サイズ）
+    const faceWidth3D = Math.hypot(jawR.x - jawL.x, jawR.z - jawL.z) * canvas.width;
     
-    // 回転角の算出 (両目の傾き)
-    const eyeR = landmarks[33];
-    const eyeL = landmarks[263];
-    const angle = Math.atan2(eyeL.y - eyeR.y, eyeL.x - eyeR.x);
+    // 3. 回転角（Roll）
+    const angle = Math.atan2(eyeR.y - eyeL.y, eyeR.x - eyeL.x);
 
-    const muzzleSize = faceWidth * 0.6; // マズルのサイズを調整
+    // 4. サイズ計算
+    const aspectRatio = muzzleImg.width / muzzleImg.height;
+    
+    // 【改善】横を向くほどベースサイズを大きくする（手前を隠すためのマージン）
+    const expansionFactor = 1.0 + Math.abs(yawFactor) * 0.25; 
+    const baseSize = faceWidth3D * 0.85 * expansionFactor;
+    
+    // 横幅の圧縮率（最小幅を少し広げてカバー力を確保）
+    const squeezeFactor = Math.max(0.45, Math.cos(yawFactor * (Math.PI / 2.2)));
+    const targetWidth = baseSize * squeezeFactor;
+    const targetHeight = baseSize / aspectRatio;
 
+    // 5. 【重要】手前と奥の両方を隠すためのダブル・オフセット
+    // wrapAround: 奥側を隠すための回り込み
+    const wrapAround = yawFactor * baseSize * 0.25;
+    // foregroundPush: 手前側の小鼻を隠すために、向いている方向へさらに押し出す
+    const foregroundPush = yawFactor * baseSize * 0.15;
+    const totalXOffset = wrapAround + foregroundPush;
+    
     ctx.save();
-    ctx.translate(nose.x * canvas.width, nose.y * canvas.height);
+    
+    // 鼻先の座標
+    const x = noseTip.x * canvas.width;
+    const y = noseTip.y * canvas.height;
+    ctx.translate(x, y);
+    
+    // 顔の傾きに合わせる
     ctx.rotate(angle);
-    ctx.drawImage(muzzleImg, -muzzleSize/2, -muzzleSize/2, muzzleSize, muzzleSize);
+
+    // 6. 描画
+    // 少し不透明度を上げて完全に隠す
+    ctx.globalAlpha = 1.0; 
+    
+    ctx.drawImage(
+        muzzleImg, 
+        -targetWidth / 2 + totalXOffset, // 計算されたオフセットを適用
+        -targetHeight / 2 + (targetHeight * 0.15), // 鼻の下を隠すため少し下げる
+        targetWidth, 
+        targetHeight
+    );
+    
     ctx.restore();
 }
-
-// 3. ファイル処理
-fileInput.addEventListener('change', async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-
-    loadingOverlay.style.display = 'flex';
-    const url = URL.createObjectURL(file);
-
-    if (file.type.startsWith('image/')) {
-        await processImage(url);
-    } else if (file.type.startsWith('video/')) {
-        await processVideo(url);
-    }
-});
-
-async function processImage(url) {
-    const img = new Image();
-    img.onload = async () => {
-        canvas.width = img.width;
-        canvas.height = img.height;
-        ctx.drawImage(img, 0, 0);
-        
-        const results = await faceLandmarker.detectForVideo(img, performance.now());
-        if (results.faceLandmarks) {
-            results.faceLandmarks.forEach(drawMuzzle);
-        }
-        
-        loadingOverlay.style.display = 'none';
-        actionArea.style.display = 'block';
-        setupDownload(canvas.toDataURL('image/png'), 'result.png');
-    };
-    img.src = url;
-}
-
-async function processVideo(url) {
-    video.src = url;
-    video.onloadedmetadata = () => {
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        
-        const stream = canvas.captureStream(30);
-        const recorder = new MediaRecorder(stream, { mimeType: 'video/webm' });
-        const chunks = [];
-        
-        recorder.ondataavailable = e => chunks.push(e.data);
-        recorder.onstop = () => {
-            const blob = new Blob(chunks, { type: 'video/webm' });
-            setupDownload(URL.createObjectURL(blob), 'result.webm');
-            loadingOverlay.style.display = 'none';
-            actionArea.style.display = 'block';
-        };
-
-        recorder.start();
-        video.play();
-        
-        async function render() {
-            if (video.paused || video.ended) {
-                recorder.stop();
-                return;
-            }
-            ctx.drawImage(video, 0, 0);
-            const results = await faceLandmarker.detectForVideo(video, performance.now());
-            if (results.faceLandmarks) {
-                results.faceLandmarks.forEach(drawMuzzle);
-            }
-            requestAnimationFrame(render);
-        }
-        render();
-    };
-}
-
-function setupDownload(url, filename) {
-    downloadBtn.onclick = () => {
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = filename;
-        a.click();
-    };
-}
-
-// 起動
-setupModel();
