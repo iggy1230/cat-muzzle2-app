@@ -3,41 +3,183 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI Cat Muzzle Overlay</title>
-    <link rel="stylesheet" href="style.css">
+    <title>Cat Muzzle AI - Stable</title>
+    <style>
+        body { font-family: sans-serif; text-align: center; background: #f4f4f9; padding: 20px; }
+        .container { max-width: 700px; margin: auto; background: white; padding: 20px; border-radius: 15px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
+        canvas { max-width: 100%; border-radius: 10px; background: #000; margin-top: 10px; }
+        .btn { padding: 12px 24px; background: #6200ee; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 16px; }
+        .btn:disabled { background: #ccc; cursor: not-allowed; }
+        #status { margin: 15px; color: #555; font-weight: bold; }
+        #downloadArea { margin-top: 15px; display: none; }
+    </style>
+    <!-- MediaPipeの読み込みを確実に -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/vision_bundle.js" crossorigin="anonymous"></script>
 </head>
 <body>
     <div class="container">
-        <header>
-            <h1>Cat Muzzle AI</h1>
-            <p>画像または動画をアップロードして猫に変身</p>
-        </header>
+        <h1>🐱 Cat Muzzle AI</h1>
+        <div id="status">エンジンの初期化中...</div>
+        
+        <input type="file" id="fileInput" accept="image/*,video/*" hidden>
+        <button id="uploadBtn" class="btn" disabled>ファイルを選択</button>
 
-        <div class="upload-section">
-            <input type="file" id="fileInput" accept="image/*,video/*" hidden>
-            <button class="btn primary" onclick="document.getElementById('fileInput').click()">
-                ファイルを選択（画像/動画）
-            </button>
-            <div id="status" class="status">モデルを読み込み中...</div>
+        <div id="downloadArea">
+            <button id="downloadBtn" class="btn" style="background: #03dac6; color: #000;">保存する</button>
+            <button onclick="location.reload()" class="btn" style="background: #eee; color: #333;">リセット</button>
         </div>
 
-        <div class="preview-area">
-            <div id="loadingOverlay" class="overlay" style="display:none;">
-                <div class="spinner"></div>
-                <p>処理中...</p>
-            </div>
-            <canvas id="outputCanvas"></canvas>
-            <video id="hiddenVideo" playsinline style="display:none;"></video>
-        </div>
-
-        <div class="action-area" id="actionArea" style="display:none;">
-            <button id="downloadBtn" class="btn success">結果をダウンロード</button>
-            <button class="btn secondary" onclick="location.reload()">もう一度</button>
-        </div>
+        <canvas id="outputCanvas"></canvas>
+        <video id="hiddenVideo" playsinline style="display:none;"></video>
     </div>
 
-    <!-- MediaPipe Tasks Vision Library -->
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/vision_bundle.js" crossorigin="anonymous"></script>
-    <script type="module" src="app.js"></script>
+    <script>
+        const { FaceLandmarker, FilesetResolver } = createFaceLandmarkerNamespace();
+        
+        let faceLandmarker;
+        const fileInput = document.getElementById('fileInput');
+        const uploadBtn = document.getElementById('uploadBtn');
+        const status = document.getElementById('status');
+        const canvas = document.getElementById('outputCanvas');
+        const ctx = canvas.getContext('2d');
+        const video = document.getElementById('hiddenVideo');
+        const downloadArea = document.getElementById('downloadArea');
+        const downloadBtn = document.getElementById('downloadBtn');
+
+        // マズル画像の準備 (テスト用に猫の鼻アイコンのBase64)
+        const muzzleImg = new Image();
+        muzzleImg.src = "https://img.icons8.com/color/96/cat-nose.png"; 
+
+        async function init() {
+            try {
+                status.innerText = "WASMエンジンをダウンロード中...";
+                const vision = await FilesetResolver.forVisionTasks(
+                    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm"
+                );
+                
+                status.innerText = "モデルをロード中...";
+                faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
+                    baseOptions: {
+                        modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
+                        delegate: "GPU"
+                    },
+                    runningMode: "VIDEO", // 画像・動画両用
+                    numFaces: 2
+                });
+
+                status.innerText = "準備完了！";
+                uploadBtn.disabled = false;
+                uploadBtn.onclick = () => fileInput.click();
+                console.log("MediaPipe Ready");
+            } catch (error) {
+                status.innerText = "エラー発生: " + error.message;
+                console.error(error);
+            }
+        }
+
+        fileInput.addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            status.innerText = "処理を開始します...";
+            const url = URL.createObjectURL(file);
+
+            if (file.type.startsWith('image/')) {
+                processImage(url);
+            } else {
+                processVideo(url);
+            }
+        });
+
+        async function processImage(url) {
+            const img = new Image();
+            img.onload = async () => {
+                canvas.width = img.width;
+                canvas.height = img.height;
+                ctx.drawImage(img, 0, 0);
+                
+                // 検出 (画像でも detectForVideo を使うことで共通化)
+                const results = faceLandmarker.detectForVideo(img, performance.now());
+                if (results.faceLandmarks) {
+                    results.faceLandmarks.forEach(drawMuzzle);
+                }
+                status.innerText = "完了！";
+                showDownload(canvas.toDataURL('image/png'), 'cat_photo.png');
+            };
+            img.src = url;
+        }
+
+        async function processVideo(url) {
+            video.src = url;
+            video.onloadedmetadata = () => {
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+                
+                const stream = canvas.captureStream(30);
+                const recorder = new MediaRecorder(stream, { mimeType: 'video/webm' });
+                const chunks = [];
+                recorder.ondataavailable = e => chunks.push(e.data);
+                recorder.onstop = () => {
+                    const blob = new Blob(chunks, { type: 'video/webm' });
+                    showDownload(URL.createObjectURL(blob), 'cat_video.webm');
+                };
+
+                recorder.start();
+                video.play();
+                
+                async function render() {
+                    if (video.paused || video.ended) {
+                        recorder.stop();
+                        status.innerText = "書き出し完了！";
+                        return;
+                    }
+                    ctx.drawImage(video, 0, 0);
+                    const results = faceLandmarker.detectForVideo(video, performance.now());
+                    if (results.faceLandmarks) {
+                        results.faceLandmarks.forEach(drawMuzzle);
+                    }
+                    requestAnimationFrame(render);
+                }
+                render();
+            };
+        }
+
+        function drawMuzzle(landmarks) {
+            const nose = landmarks[4]; // 鼻の頭
+            const jawR = landmarks[234];
+            const jawL = landmarks[454];
+            const eyeR = landmarks[33];
+            const eyeL = landmarks[263];
+
+            const faceWidth = Math.hypot(jawL.x - jawR.x, jawL.y - jawR.y) * canvas.width;
+            const angle = Math.atan2(eyeL.y - eyeR.y, eyeL.x - eyeR.x);
+            const size = faceWidth * 0.5;
+
+            ctx.save();
+            ctx.translate(nose.x * canvas.width, nose.y * canvas.height);
+            ctx.rotate(angle);
+            ctx.drawImage(muzzleImg, -size/2, -size/2, size, size);
+            ctx.restore();
+        }
+
+        function showDownload(url, name) {
+            downloadArea.style.display = 'block';
+            downloadBtn.onclick = () => {
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = name;
+                a.click();
+            };
+        }
+
+        // ヘルパー関数: CDNのグローバル変数を名前空間として取得
+        function createFaceLandmarkerNamespace() {
+            return {
+                FaceLandmarker: mpVision.FaceLandmarker,
+                FilesetResolver: mpVision.FilesetResolver
+            };
+        }
+
+        init();
+    </script>
 </body>
 </html>
