@@ -2,25 +2,33 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>Hybrid Cat Muzzle AI - Professional Edition</title>
+    <title>Cat Muzzle AI - Asymmetric Precision v26</title>
     <style>
-        body { font-family: 'Segoe UI', sans-serif; background: #0f0f0f; color: #eee; text-align: center; margin: 0; padding: 20px; }
-        .card { background: #1e1e1e; padding: 25px; border-radius: 24px; max-width: 800px; margin: auto; box-shadow: 0 10px 50px rgba(0,0,0,0.5); }
-        #log { background: #000; color: #00ff66; font-family: 'Consolas', monospace; font-size: 12px; padding: 12px; height: 120px; overflow-y: auto; text-align: left; border-radius: 12px; margin: 15px 0; border: 1px solid #333; white-space: pre-wrap; }
-        .preview-box { position: relative; border: 2px solid #333; border-radius: 16px; overflow: hidden; background: #000; min-height: 400px; }
-        canvas { max-width: 100%; height: auto; display: block; margin: auto; }
-        .btn { padding: 18px 36px; background: #6200ee; color: white; border: none; border-radius: 12px; font-weight: bold; cursor: pointer; margin: 10px; width: 90%; font-size: 16px; transition: 0.3s; }
-        .btn:hover:not(:disabled) { background: #7722ff; transform: translateY(-2px); }
+        body { font-family: sans-serif; background: #050505; color: #eee; text-align: center; margin: 0; padding: 20px; }
+        .card { background: #151515; padding: 30px; border-radius: 24px; max-width: 850px; margin: auto; box-shadow: 0 20px 60px rgba(0,0,0,0.8); border: 1px solid #222; }
+        #log { background: #000; color: #00ff66; font-family: monospace; font-size: 11px; padding: 12px; height: 100px; overflow-y: auto; text-align: left; border-radius: 12px; margin-bottom: 20px; border: 1px solid #222; white-space: pre-wrap; }
+        .preview-box { position: relative; width: 100%; background: #000; border-radius: 16px; border: 1px solid #333; overflow: hidden; display: flex; flex-direction: column; align-items: center; }
+        canvas { width: 100%; height: auto; display: block; }
+        .btn { padding: 18px 36px; background: #6200ee; color: white; border: none; border-radius: 14px; font-weight: bold; cursor: pointer; font-size: 16px; width: 90%; margin: 10px 0; transition: all 0.3s; }
+        .btn:hover:not(:disabled) { background: #7c4dff; transform: translateY(-2px); }
         .btn:disabled { background: #333; color: #777; cursor: wait; }
+        .progress-box { width: 90%; margin: 15px auto; display: none; }
+        .progress-bar { width: 100%; background: #333; height: 10px; border-radius: 5px; overflow: hidden; }
+        #progressFill { width: 0%; background: linear-gradient(90deg, #00e676, #00c853); height: 100%; }
     </style>
 </head>
 <body>
     <div class="card">
-        <h2>🐱 HYBRID MUZZLE AI v3.0</h2>
-        <div id="log">ログ: 初期化を開始...</div>
+        <h2 style="margin-top:0;">🐱 CAT MUZZLE AI <span style="font-size:12px; color:#7c4dff;">v26 ASYMMETRIC-SPLIT</span></h2>
+        <div id="log">ログ: システム起動中...</div>
         
         <input type="file" id="fileInput" accept="image/*,video/*" hidden>
-        <button id="uploadBtn" class="btn" disabled>AIモデルをロード中...</button>
+        <button id="uploadBtn" class="btn" disabled>エンジンをロード中...</button>
+
+        <div class="progress-box" id="progressBox">
+            <div class="progress-bar"><div id="progressFill"></div></div>
+            <div id="progressLabel" style="font-size:13px; margin-top:8px; color:#00e676; font-weight:bold;">動画の3D構造を詳細解析中... 0%</div>
+        </div>
 
         <div class="preview-box">
             <canvas id="canvas"></canvas>
@@ -29,177 +37,212 @@
     </div>
 
     <script type="module">
-        import { FaceDetector, FaceLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3";
+        import { FaceLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3";
 
         const canvas = document.getElementById('canvas');
         const ctx = canvas.getContext('2d');
         const video = document.getElementById('video');
         const fileInput = document.getElementById('fileInput');
         const uploadBtn = document.getElementById('uploadBtn');
+        const progressBox = document.getElementById('progressBox');
+        const progressFill = document.getElementById('progressFill');
+        const progressLabel = document.getElementById('progressLabel');
         const logArea = document.getElementById('log');
 
-        let detector;    // YOLO役割: 広域検出
-        let landmarker;  // 精密役割: ROI内解析
+        let faceLandmarker;
         let muzzleImg = new Image();
-        muzzleImg.src = "muzzle.png"; // 同フォルダのPNG
+        muzzleImg.src = "muzzle.png"; 
+
+        let frameSequence = []; 
 
         function addLog(msg) {
-            const time = new Date().toLocaleTimeString();
-            logArea.innerText += `[${time}] ${msg}\n`;
+            logArea.innerText += `> ${msg}\n`;
             logArea.scrollTop = logArea.scrollHeight;
         }
 
         async function init() {
             try {
-                addLog("WASMエンジンを読み込み中...");
                 const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm");
-                
-                // 1. YOLO役割 (FaceDetector) のロード
-                addLog("モデル1/2: 顔検出器をロード中...");
-                detector = await FaceDetector.createFromOptions(vision, {
-                    baseOptions: { 
-                        modelAssetPath: `https://storage.googleapis.com/mediapipe-models/face_detector/face_detector/float16/1/face_detector.task`,
-                        delegate: "GPU"
-                    },
-                    runningMode: "VIDEO"
+                faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
+                    baseOptions: { modelAssetPath: `https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task`, delegate: "GPU" },
+                    runningMode: "IMAGE", numFaces: 2
                 });
-
-                // 2. 精密解析役割 (FaceLandmarker) のロード
-                addLog("モデル2/2: 精密解析器をロード中...");
-                landmarker = await FaceLandmarker.createFromOptions(vision, {
-                    baseOptions: { 
-                        modelAssetPath: `https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task`,
-                        delegate: "GPU"
-                    },
-                    runningMode: "IMAGE", // ROI切り出し画像(IMAGE形式)を解析するため
-                    numFaces: 1
-                });
-
-                addLog("ハイブリッドエンジン準備完了。");
+                addLog("システム準備完了。");
                 uploadBtn.disabled = false;
-                uploadBtn.innerText = "写真・動画を選択して開始";
+                uploadBtn.innerText = "動画・写真を選択";
                 uploadBtn.onclick = () => fileInput.click();
-            } catch (e) { 
-                addLog("致命的エラー: " + e.message); 
-                console.error(e);
-            }
+            } catch (e) { addLog("初期化失敗: " + e.message); }
         }
 
         fileInput.onchange = (e) => {
             const file = e.target.files[0];
             if (!file) return;
             const url = URL.createObjectURL(file);
-            if (file.type.startsWith('image/')) {
-                const img = new Image();
-                img.onload = () => {
-                    canvas.width = img.width; canvas.height = img.height;
-                    processHybridFrame(img);
-                };
-                img.src = url;
-            } else {
-                video.src = url;
-                video.onloadedmetadata = () => {
-                    canvas.width = video.videoWidth;
-                    canvas.height = video.videoHeight;
-                    video.play();
-                    requestAnimationFrame(renderLoop);
-                };
-            }
+            if (file.type.startsWith('image/')) processImage(url);
+            else runProAnalysis(url);
         };
 
-        async function renderLoop() {
-            if (video.paused || video.ended) return;
-            await processHybridFrame(video);
-            requestAnimationFrame(renderLoop);
+        async function runProAnalysis(url) {
+            addLog("3D全フレーム解析を開始...");
+            video.src = url; video.load();
+            video.onloadedmetadata = async () => {
+                canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+                frameSequence = []; progressBox.style.display = "block";
+                
+                const fps = 30, totalFrames = Math.floor(video.duration * fps);
+                let rawTracks = [[], []]; let lastPos = [null, null];
+
+                for (let i = 0; i <= totalFrames; i++) {
+                    video.currentTime = i / fps;
+                    await new Promise(r => video.onseeked = r);
+                    const results = faceLandmarker.detect(video);
+                    const faces = results.faceLandmarks || [];
+                    
+                    let assigned = [null, null];
+                    if (faces.length > 0) {
+                        let available = faces.map((_, idx) => idx);
+                        [0, 1].forEach(id => {
+                            if (lastPos[id]) {
+                                let best = -1, minDist = 0.2;
+                                available.forEach(idx => {
+                                    const d = Math.hypot(faces[idx][4].x - lastPos[id].x, faces[idx][4].y - lastPos[id].y);
+                                    if (d < minDist) { minDist = d; best = idx; }
+                                });
+                                if (best !== -1) { assigned[id] = faces[best]; available = available.filter(n => n !== best); }
+                            }
+                        });
+                        available.forEach(idx => { if (!assigned[0]) assigned[0] = faces[idx]; else if (!assigned[1]) assigned[1] = faces[idx]; });
+                    }
+                    for (let id = 0; id < 2; id++) {
+                        const metrics = assigned[id] ? extractMetrics(assigned[id]) : null;
+                        rawTracks[id].push(metrics);
+                        if (metrics) lastPos[id] = { x: metrics.nx, y: metrics.ny };
+                    }
+                    progressFill.style.width = (i/totalFrames*100) + "%";
+                }
+
+                // グローバルIDソート
+                const avgX0 = getAvg(rawTracks[0], 'nx'); const avgX1 = getAvg(rawTracks[1], 'nx');
+                if (avgX1 !== 0 && avgX0 > avgX1) [rawTracks[0], rawTracks[1]] = [rawTracks[1], rawTracks[0]];
+
+                rawTracks.forEach(t => { interpolate(t); smooth(t); });
+                frameSequence = Array.from({length: rawTracks[0].length}, (_, i) => ({ time: i / fps, faces: [rawTracks[0][i], rawTracks[1][i]] }));
+
+                addLog("解析完了。レンダリングを開始します。");
+                progressBox.style.display = "none";
+                video.currentTime = 0; video.play();
+                requestAnimationFrame(renderLoop);
+            };
         }
 
-        // ROI解析用の作業用キャンバス
-        const roiCanvas = document.createElement('canvas');
-        const roiCtx = roiCanvas.getContext('2d');
+        function extractMetrics(lm) {
+            const nx = (lm[4].x + lm[1].x + lm[195].x) / 3;
+            const ny = (lm[4].y + lm[1].y + lm[195].y) / 3;
+            const eyeL = lm[33], eyeR = lm[263], jawL = lm[234], jawR = lm[454], chin = lm[152];
+            const yaw3D = Math.atan2(eyeR.z - eyeL.z, eyeR.x - eyeL.x); 
+            const yaw2D = (lm[4].x - (eyeL.x + eyeR.x)*0.5) / (Math.abs(jawR.x - jawL.x)*0.5 || 0.1);
+            const pitch = Math.atan2(chin.z - lm[4].z, chin.y - lm[4].y); 
+            const scale = Math.abs(jawR.x - jawL.x)*0.4 + Math.abs(lm[323].x - lm[93].x)*0.4 + Math.abs(eyeR.x - eyeL.x)*0.2;
+            return { nx, ny, yaw: yaw2D * 0.6 + yaw3D * 0.4, pitch, scale, 
+                     roll: Math.atan2((eyeR.y - eyeL.y) * canvas.height, (eyeR.x - eyeL.x) * canvas.width) };
+        }
 
-        async function processHybridFrame(source) {
-            // メインキャンバスに描画
-            ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
-
-            // STEP 1: YOLO役割で見つける
-            const detectionResult = await detector.detectForVideo(source, performance.now());
-            
-            if (detectionResult.detections) {
-                for (const detection of detectionResult.detections) {
-                    const bbox = detection.boundingBox;
-
-                    // STEP 2: ROI切り出し (周辺を30%余裕持たせてMediaPipeの認識を助ける)
-                    const pad = 0.3;
-                    const roi = {
-                        x: Math.max(0, bbox.originX - bbox.width * pad),
-                        y: Math.max(0, bbox.originY - bbox.height * pad),
-                        w: Math.min(canvas.width - (bbox.originX - bbox.width * pad), bbox.width * (1 + pad * 2)),
-                        h: Math.min(canvas.height - (bbox.originY - bbox.height * pad), bbox.height * (1 + pad * 2))
-                    };
-
-                    roiCanvas.width = roi.w; roiCanvas.height = roi.h;
-                    roiCtx.drawImage(canvas, roi.x, roi.y, roi.w, roi.h, 0, 0, roi.w, roi.h);
-
-                    // STEP 3: 精密解析
-                    const landmarkResult = landmarker.detect(roiCanvas);
-
-                    if (landmarkResult.faceLandmarks && landmarkResult.faceLandmarks.length > 0) {
-                        drawEnhancedMuzzle(landmarkResult.faceLandmarks[0], roi);
+        function interpolate(track) {
+            for (let i = 1; i < track.length - 1; i++) {
+                if (!track[i]) {
+                    let p = i - 1; while(p >= 0 && !track[p]) p--;
+                    let n = i + 1; while(n < track.length && !track[n]) n++;
+                    if (p >= 0 && n < track.length) {
+                        const r = (i - p) / (n - p); track[i] = {};
+                        ['nx', 'ny', 'scale'].forEach(k => track[i][k] = track[p][k] + (track[n][k] - track[p][k]) * r);
+                        ['roll', 'yaw', 'pitch'].forEach(k => {
+                            let d = track[n][k] - track[p][k];
+                            while(d > Math.PI) d -= Math.PI*2; while(d < -Math.PI) d += Math.PI*2;
+                            track[i][k] = track[p][k] + d * r;
+                        });
                     }
                 }
             }
         }
 
-        function drawEnhancedMuzzle(landmarks, roi) {
-            // ROIローカル座標をグローバルキャンバス座標にマッピング
-            const toGlobal = (lm) => ({
-                x: roi.x + (lm.x * roi.w),
-                y: roi.y + (lm.y * roi.h),
-                z: lm.z * roi.w
-            });
+        function smooth(t) {
+            const win = 3, copy = JSON.parse(JSON.stringify(t));
+            for (let i = 0; i < t.length; i++) {
+                if (!copy[i]) continue;
+                let count = 0, sums = {nx:0, ny:0, scale:0, roll:0, yaw:0, pitch:0};
+                for (let j = i-win; j <= i+win; j++) {
+                    if (copy[j]) {
+                        sums.nx += copy[j].nx; sums.ny += copy[j].ny; sums.scale += copy[j].scale;
+                        ['roll', 'yaw', 'pitch'].forEach(k => {
+                            let d = copy[j][k] - copy[i][k];
+                            while(d > Math.PI) d -= Math.PI*2; while(d < -Math.PI) d += Math.PI*2;
+                            sums[k] += copy[i][k] + d;
+                        });
+                        count++;
+                    }
+                }
+                for(let k in sums) t[i][k] = sums[k] / count;
+            }
+        }
 
-            const noseTip = toGlobal(landmarks[4]);
-            const jawL = toGlobal(landmarks[234]);
-            const jawR = toGlobal(landmarks[454]);
-            const eyeL = toGlobal(landmarks[33]);
-            const eyeR = toGlobal(landmarks[263]);
+        function getAvg(t, k) { let s = 0, c = 0; t.forEach(f => { if(f){ s += f[k]; c++; }}); return c > 0 ? s / c : 0; }
 
-            const faceCenterX = (jawL.x + jawR.x) / 2;
-            const faceWidth2D = Math.abs(jawR.x - jawL.x);
-            const yawFactor = (noseTip.x - faceCenterX) / (faceWidth2D / 2); // -1.0(左) ～ 1.0(右)
+        function renderLoop() {
+            if (video.paused || video.ended) return;
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            const frame = frameSequence.find(f => f.time >= video.currentTime) || frameSequence[frameSequence.length-1];
+            if (frame) frame.faces.forEach(f => { if (f) drawAsymmetricMuzzle(f); });
+            requestAnimationFrame(renderLoop);
+        }
 
-            // 奥行きを考慮した3D幅
-            const faceWidth3D = Math.hypot(jawR.x - jawL.x, (jawR.z - jawL.z));
-            const angle = Math.atan2(eyeR.y - eyeL.y, eyeR.x - eyeL.x);
+        // --- 2. 非対称変形レンダリング (v25 核心実装) ---
+        function drawAsymmetricMuzzle(f) {
+            if (!muzzleImg.complete) return;
 
-            // 【手前側カバー強化ロジック】
-            // 横を向くほど、マズルを手前側に膨らませる (Expansion)
-            const expansion = 1.0 + Math.abs(yawFactor) * 0.5; 
-            const baseSize = faceWidth3D * 0.8 * expansion;
-            
-            const squeezeFactor = Math.max(0.5, Math.cos(yawFactor * (Math.PI / 2.2)));
-            const targetWidth = baseSize * squeezeFactor;
-            const targetHeight = targetWidth / (muzzleImg.width / muzzleImg.height);
+            const px = f.nx * canvas.width;
+            const py = f.ny * canvas.height;
+            const yaw = Math.max(-1.2, Math.min(1.2, f.yaw)); // 過剰な歪みを抑制
+            const aspect = muzzleImg.width / muzzleImg.height;
 
-            // 手前側の鼻を見えなくするための強力なオフセット
-            // yawFactorがプラス（右向き）なら、右方向（手前側）にマズルを大きく突き出す
-            const wrapAround = yawFactor * baseSize * 0.35; 
-            const foregroundShield = yawFactor * baseSize * 0.30; 
-            const totalXOffset = wrapAround + foregroundShield;
+            // ① 左右スケール差：修正版
+            // yawがプラス(鼻が右移動) = 右を向いている = 左側が手前
+            // よって sxR(奥側)を潰す
+            const sxL = 1 - Math.max(0, -yaw) * 0.45;
+            const sxR = 1 - Math.max(0, yaw) * 0.45;
+
+            // ② センター・シフト
+            const baseSizePx = f.scale * canvas.width * 0.9; 
+            const centerShiftX = yaw * baseSizePx * 0.12;
+
+            // ③ 垂直スケールとPitch補正
+            const scaleY = 1 - Math.abs(yaw) * 0.15;
+            const pitchShift = (f.pitch - 0.5) * baseSizePx * 0.25;
+
+            const dw = baseSizePx;
+            const dh = baseSizePx / aspect;
 
             ctx.save();
-            ctx.translate(noseTip.x, noseTip.y);
-            ctx.rotate(angle);
+            ctx.translate(px + centerShiftX, py);
+            ctx.rotate(f.roll);
             
-            ctx.globalAlpha = 1.0; // 完全に隠すために不透明
-            ctx.drawImage(
-                muzzleImg, 
-                -targetWidth / 2 + totalXOffset, 
-                -targetHeight / 2 + (targetHeight * 0.18), 
-                targetWidth, 
-                targetHeight
-            );
-            
+            // 角度ガード：限界角で少し透過
+            ctx.globalAlpha = Math.max(0, Math.min(1.0, 1.8 - Math.abs(yaw)));
+
+            const imgW = muzzleImg.width;
+            const imgH = muzzleImg.height;
+
+            // 左半分
+            ctx.save();
+            ctx.scale(sxL, scaleY);
+            ctx.drawImage(muzzleImg, 0, 0, imgW / 2, imgH, -dw/2, -dh/2 + (dh * 0.15) + pitchShift, dw/2, dh);
+            ctx.restore();
+
+            // 右半分
+            ctx.save();
+            ctx.scale(sxR, scaleY);
+            ctx.drawImage(muzzleImg, imgW / 2, 0, imgW / 2, imgH, 0, -dh/2 + (dh * 0.15) + pitchShift, dw/2, dh);
+            ctx.restore();
+
             ctx.restore();
         }
 
