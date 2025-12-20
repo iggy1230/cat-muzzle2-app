@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>Hybrid Cat Muzzle AI - Fixed Model Path</title>
+    <title>Hybrid Muzzle AI - Fixed 404</title>
     <style>
         body { font-family: sans-serif; background: #1a1a1a; color: #fff; text-align: center; margin: 0; padding: 20px; }
         .card { background: #2d2d2d; padding: 20px; border-radius: 20px; max-width: 700px; margin: auto; }
@@ -15,7 +15,7 @@
 </head>
 <body>
     <div class="card">
-        <h2>🐱 HYBRID MUZZLE AI (Ver. 2.0)</h2>
+        <h2>🐱 HYBRID MUZZLE AI (Ver. 2.5)</h2>
         <div id="log">ログ: システム初期化中...</div>
         
         <input type="file" id="fileInput" accept="image/*,video/*" hidden>
@@ -37,10 +37,10 @@
         const uploadBtn = document.getElementById('uploadBtn');
         const logArea = document.getElementById('log');
 
-        let detector;    // YOLO役
-        let landmarker;  // 精密解析役
+        let detector;    // 見つける役 (YOLOスタイル)
+        let landmarker;  // 測る役 (精密解析)
         let muzzleImg = new Image();
-        muzzleImg.src = "muzzle.png"; // フォルダ内に置いてください
+        muzzleImg.src = "muzzle.png"; 
 
         function addLog(msg) {
             logArea.innerText += `> ${msg}\n`;
@@ -49,31 +49,33 @@
 
         async function init() {
             try {
-                addLog("WASMリゾルバーを読み込み中...");
+                addLog("WASMエンジンを読み込み中...");
                 const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm");
                 
-                addLog("1/2: YOLO顔検出モデルをロード中...");
+                // 1. 顔検出 (YOLO役) - モデルURLを修正
+                addLog("1/2: BlazeFaceモデルをロード中...");
                 detector = await FaceDetector.createFromOptions(vision, {
                     baseOptions: { 
-                        modelAssetPath: `https://storage.googleapis.com/mediapipe-models/face_detector/face_detector/float16/1/face_detector.task`,
+                        modelAssetPath: `https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.task`,
                         delegate: "GPU"
                     },
                     runningMode: "VIDEO"
                 });
 
-                addLog("2/2: 精密ランドマークモデルをロード中...");
+                // 2. 精密ランドマーク (解析役)
+                addLog("2/2: 精密解析モデルをロード中...");
                 landmarker = await FaceLandmarker.createFromOptions(vision, {
                     baseOptions: { 
                         modelAssetPath: `https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task`,
                         delegate: "GPU"
                     },
-                    runningMode: "VIDEO",
+                    runningMode: "IMAGE", // 切り出し画像に使うためIMAGEモード
                     numFaces: 1
                 });
 
-                addLog("システム起動完了。ファイルを選んでください。");
+                addLog("ハイブリッドエンジン準備完了！");
                 uploadBtn.disabled = false;
-                uploadBtn.innerText = "写真・動画をアップロード";
+                uploadBtn.innerText = "写真・動画を選択";
                 uploadBtn.onclick = () => fileInput.click();
             } catch (e) { 
                 addLog("致命的エラー: " + e.message); 
@@ -89,7 +91,7 @@
                 const img = new Image();
                 img.onload = () => {
                     canvas.width = img.width; canvas.height = img.height;
-                    processSource(img);
+                    processFrame(img);
                 };
                 img.src = url;
             } else {
@@ -105,24 +107,27 @@
 
         async function loop() {
             if (video.paused || video.ended) return;
-            await processSource(video);
+            await processFrame(video);
             requestAnimationFrame(loop);
         }
 
-        async function processSource(source) {
-            ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
-            const ts = performance.now();
+        // ROI解析用の使い回しキャンバス
+        const roiCanvas = document.createElement('canvas');
+        const roiCtx = roiCanvas.getContext('2d');
 
-            // YOLO役で顔の枠を特定
-            const detectionResult = await detector.detectForVideo(source, ts);
+        async function processFrame(source) {
+            // 背景を描画
+            ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
+
+            // 1. Detectorで見つける
+            const detectionResult = await detector.detectForVideo(source, performance.now());
             
             if (detectionResult.detections) {
-                for (let i = 0; i < Math.min(detectionResult.detections.length, 2); i++) {
-                    const face = detectionResult.detections[i];
-                    const bbox = face.boundingBox;
+                for (const detection of detectionResult.detections) {
+                    const bbox = detection.boundingBox;
 
-                    // ROIの切り出し (25%パディング)
-                    const pad = 0.25;
+                    // 2. ROI切り出し (周辺情報を入れるため30%パディング)
+                    const pad = 0.3;
                     const roi = {
                         x: Math.max(0, bbox.originX - bbox.width * pad),
                         y: Math.max(0, bbox.originY - bbox.height * pad),
@@ -130,26 +135,25 @@
                         h: Math.min(canvas.height - bbox.originY, bbox.height * (1 + pad * 2))
                     };
 
-                    // ROI内の精密解析用ビットマップを作成
-                    const roiCanvas = document.createElement('canvas');
                     roiCanvas.width = roi.w; roiCanvas.height = roi.h;
-                    roiCanvas.getContext('2d').drawImage(canvas, roi.x, roi.y, roi.w, roi.h, 0, 0, roi.w, roi.h);
+                    roiCtx.drawImage(canvas, roi.x, roi.y, roi.w, roi.h, 0, 0, roi.w, roi.h);
 
-                    // ROI内のみを精密解析
-                    const landmarkResult = await landmarker.detectForVideo(roiCanvas, ts);
+                    // 3. 切り出したROIに対して精密解析 (IMAGEモードで実行)
+                    const landmarkResult = await landmarker.detect(roiCanvas);
 
                     if (landmarkResult.faceLandmarks && landmarkResult.faceLandmarks.length > 0) {
-                        drawMuzzleWithForecover(landmarkResult.faceLandmarks[0], roi);
+                        drawPreciseMuzzle(landmarkResult.faceLandmarks[0], roi);
                     }
                 }
             }
         }
 
-        function drawMuzzleWithForecover(landmarks, roi) {
+        function drawPreciseMuzzle(landmarks, roi) {
+            // ROI内のローカル座標を全体座標へ変換
             const toGlobal = (lm) => ({
                 x: roi.x + (lm.x * roi.w),
                 y: roi.y + (lm.y * roi.h),
-                z: lm.z * roi.w
+                z: lm.z * roi.w // Zもスケールとして変換
             });
 
             const noseTip = toGlobal(landmarks[4]);
@@ -160,33 +164,24 @@
 
             const faceCenterX = (jawL.x + jawR.x) / 2;
             const faceWidth2D = Math.abs(jawR.x - jawL.x);
-            const yawFactor = (noseTip.x - faceCenterX) / (faceWidth2D / 2); // -1(左) ～ 1(右)
+            const yawFactor = (noseTip.x - faceCenterX) / (faceWidth2D / 2);
 
-            // 奥行きを含めた物理幅の計算
             const faceWidth3D = Math.hypot(jawR.x - jawL.x, (jawR.z - jawL.z));
             const angle = Math.atan2(eyeR.y - eyeL.y, eyeR.x - eyeL.x);
 
-            // 【手前小鼻を隠すための補正】
-            // 顔が斜めになるほど全体のサイズを膨らませる
-            const expansion = 1.0 + Math.abs(yawFactor) * 0.45; 
+            // 【横顔カバーロジック】
+            const expansion = 1.0 + Math.abs(yawFactor) * 0.5; // 横向き時にさらに拡大
             const baseSize = faceWidth3D * 0.85 * expansion;
-            
-            // 圧縮率の制限（マズルが細くなりすぎないように）
-            const squeezeFactor = Math.max(0.55, Math.cos(yawFactor * (Math.PI / 2.2)));
+            const squeezeFactor = Math.max(0.5, Math.cos(yawFactor * (Math.PI / 2.2)));
             const targetWidth = baseSize * squeezeFactor;
             const targetHeight = targetWidth / (muzzleImg.width / muzzleImg.height);
 
-            // ダブルオフセット（奥の回り込み + 手前への突き出し）
-            // yawFactorがプラス（右向き）なら、マズルをさらに右へ押し出す
-            const wrapAround = yawFactor * baseSize * 0.30;
-            const foregroundPush = yawFactor * baseSize * 0.25; 
-            const totalXOffset = wrapAround + foregroundPush;
+            // 【手前小鼻隠し】奥側の回り込み(0.35) + 手前への突き出し(0.30)
+            const totalXOffset = yawFactor * baseSize * 0.65; 
 
             ctx.save();
             ctx.translate(noseTip.x, noseTip.y);
             ctx.rotate(angle);
-            ctx.globalAlpha = 1.0;
-
             ctx.drawImage(
                 muzzleImg, 
                 -targetWidth / 2 + totalXOffset, 
