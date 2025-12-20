@@ -2,21 +2,21 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>Hybrid Cat Muzzle AI (YOLO + MediaPipe)</title>
+    <title>Hybrid Cat Muzzle AI - Fixed Model Path</title>
     <style>
         body { font-family: sans-serif; background: #1a1a1a; color: #fff; text-align: center; margin: 0; padding: 20px; }
         .card { background: #2d2d2d; padding: 20px; border-radius: 20px; max-width: 700px; margin: auto; }
-        #log { background: #000; color: #0f0; font-family: monospace; font-size: 11px; padding: 10px; height: 80px; overflow-y: auto; text-align: left; border-radius: 8px; margin: 10px 0; }
-        .preview-box { position: relative; border: 2px solid #444; border-radius: 12px; overflow: hidden; background: #000; }
-        canvas { max-width: 100%; height: auto; }
-        .btn { padding: 15px 30px; background: #7c4dff; color: white; border: none; border-radius: 10px; font-weight: bold; cursor: pointer; margin: 10px; width: 80%; }
-        .btn:disabled { background: #444; opacity: 0.6; }
+        #log { background: #000; color: #0f0; font-family: monospace; font-size: 11px; padding: 10px; height: 100px; overflow-y: auto; text-align: left; border-radius: 8px; margin: 10px 0; white-space: pre-wrap; }
+        .preview-box { position: relative; border: 2px solid #444; border-radius: 12px; overflow: hidden; background: #000; min-height: 300px; }
+        canvas { max-width: 100%; height: auto; display: block; margin: auto; }
+        .btn { padding: 16px 32px; background: #7c4dff; color: white; border: none; border-radius: 10px; font-weight: bold; cursor: pointer; margin: 10px; width: 80%; }
+        .btn:disabled { background: #444; opacity: 0.6; cursor: wait; }
     </style>
 </head>
 <body>
     <div class="card">
-        <h2>🐱 HYBRID MUZZLE AI</h2>
-        <div id="log">システム初期化中...</div>
+        <h2>🐱 HYBRID MUZZLE AI (Ver. 2.0)</h2>
+        <div id="log">ログ: システム初期化中...</div>
         
         <input type="file" id="fileInput" accept="image/*,video/*" hidden>
         <button id="uploadBtn" class="btn" disabled>エンジン読み込み中...</button>
@@ -37,10 +37,10 @@
         const uploadBtn = document.getElementById('uploadBtn');
         const logArea = document.getElementById('log');
 
-        let detector;    // YOLO役 (顔検出)
-        let landmarker;  // 精密計測役 (ランドマーク)
+        let detector;    // YOLO役
+        let landmarker;  // 精密解析役
         let muzzleImg = new Image();
-        muzzleImg.src = "muzzle.png";
+        muzzleImg.src = "muzzle.png"; // フォルダ内に置いてください
 
         function addLog(msg) {
             logArea.innerText += `> ${msg}\n`;
@@ -49,26 +49,36 @@
 
         async function init() {
             try {
+                addLog("WASMリゾルバーを読み込み中...");
                 const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm");
                 
-                // 1. YOLO役: Face Detector (高速・広範囲)
+                addLog("1/2: YOLO顔検出モデルをロード中...");
                 detector = await FaceDetector.createFromOptions(vision, {
-                    baseOptions: { modelAssetPath: `https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.task` },
+                    baseOptions: { 
+                        modelAssetPath: `https://storage.googleapis.com/mediapipe-models/face_detector/face_detector/float16/1/face_detector.task`,
+                        delegate: "GPU"
+                    },
                     runningMode: "VIDEO"
                 });
 
-                // 2. 解析役: Face Landmarker (精密・ROI内)
+                addLog("2/2: 精密ランドマークモデルをロード中...");
                 landmarker = await FaceLandmarker.createFromOptions(vision, {
-                    baseOptions: { modelAssetPath: `https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task` },
+                    baseOptions: { 
+                        modelAssetPath: `https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task`,
+                        delegate: "GPU"
+                    },
                     runningMode: "VIDEO",
-                    numFaces: 1 // ROIごとに1人
+                    numFaces: 1
                 });
 
-                addLog("YOLO + MediaPipe ハイブリッドエンジン起動完了");
+                addLog("システム起動完了。ファイルを選んでください。");
                 uploadBtn.disabled = false;
-                uploadBtn.innerText = "写真・動画を選択";
+                uploadBtn.innerText = "写真・動画をアップロード";
                 uploadBtn.onclick = () => fileInput.click();
-            } catch (e) { addLog("初期化失敗: " + e.message); }
+            } catch (e) { 
+                addLog("致命的エラー: " + e.message); 
+                console.error(e);
+            }
         }
 
         fileInput.onchange = (e) => {
@@ -79,7 +89,7 @@
                 const img = new Image();
                 img.onload = () => {
                     canvas.width = img.width; canvas.height = img.height;
-                    processFrame(img);
+                    processSource(img);
                 };
                 img.src = url;
             } else {
@@ -88,62 +98,58 @@
                     canvas.width = video.videoWidth;
                     canvas.height = video.videoHeight;
                     video.play();
-                    renderLoop();
+                    loop();
                 };
             }
         };
 
-        async function renderLoop() {
+        async function loop() {
             if (video.paused || video.ended) return;
-            await processFrame(video);
-            requestAnimationFrame(renderLoop);
+            await processSource(video);
+            requestAnimationFrame(loop);
         }
 
-        async function processFrame(source) {
-            // 背景描画
+        async function processSource(source) {
             ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
+            const ts = performance.now();
 
-            // --- STEP 1: YOLO役 (顔の位置を特定) ---
-            const detectionResult = await detector.detectForVideo(source, performance.now());
+            // YOLO役で顔の枠を特定
+            const detectionResult = await detector.detectForVideo(source, ts);
             
             if (detectionResult.detections) {
-                // 最大2人まで
                 for (let i = 0; i < Math.min(detectionResult.detections.length, 2); i++) {
                     const face = detectionResult.detections[i];
                     const bbox = face.boundingBox;
 
-                    // --- STEP 2: ROIの切り出し (少し余裕を持たせる) ---
-                    const padding = 0.2;
+                    // ROIの切り出し (25%パディング)
+                    const pad = 0.25;
                     const roi = {
-                        x: Math.max(0, bbox.originX - bbox.width * padding),
-                        y: Math.max(0, bbox.originY - bbox.height * padding),
-                        w: Math.min(canvas.width, bbox.width * (1 + padding * 2)),
-                        h: Math.min(canvas.height, bbox.height * (1 + padding * 2))
+                        x: Math.max(0, bbox.originX - bbox.width * pad),
+                        y: Math.max(0, bbox.originY - bbox.height * pad),
+                        w: Math.min(canvas.width - bbox.originX, bbox.width * (1 + pad * 2)),
+                        h: Math.min(canvas.height - bbox.originY, bbox.height * (1 + pad * 2))
                     };
 
-                    // ROI内での精密解析のため、Canvasから一時的にROIを抽出
-                    const tempCanvas = document.createElement('canvas');
-                    tempCanvas.width = roi.w; tempCanvas.height = roi.h;
-                    const tempCtx = tempCanvas.getContext('2d');
-                    tempCtx.drawImage(canvas, roi.x, roi.y, roi.w, roi.h, 0, 0, roi.w, roi.h);
+                    // ROI内の精密解析用ビットマップを作成
+                    const roiCanvas = document.createElement('canvas');
+                    roiCanvas.width = roi.w; roiCanvas.height = roi.h;
+                    roiCanvas.getContext('2d').drawImage(canvas, roi.x, roi.y, roi.w, roi.h, 0, 0, roi.w, roi.h);
 
-                    // --- STEP 3: 解析役 (ROI内の精密ランドマーク) ---
-                    const landmarkResult = await landmarker.detectForVideo(tempCanvas, performance.now());
+                    // ROI内のみを精密解析
+                    const landmarkResult = await landmarker.detectForVideo(roiCanvas, ts);
 
                     if (landmarkResult.faceLandmarks && landmarkResult.faceLandmarks.length > 0) {
-                        // 座標をグローバルに変換して描画
-                        drawHybridMuzzle(landmarkResult.faceLandmarks[0], roi);
+                        drawMuzzleWithForecover(landmarkResult.faceLandmarks[0], roi);
                     }
                 }
             }
         }
 
-        function drawHybridMuzzle(landmarks, roi) {
-            // ROI内のローカル座標をキャンバスのグローバル座標へ変換
+        function drawMuzzleWithForecover(landmarks, roi) {
             const toGlobal = (lm) => ({
                 x: roi.x + (lm.x * roi.w),
                 y: roi.y + (lm.y * roi.h),
-                z: lm.z // Zはスケール用なのでそのまま
+                z: lm.z * roi.w
             });
 
             const noseTip = toGlobal(landmarks[4]);
@@ -152,30 +158,39 @@
             const eyeL = toGlobal(landmarks[33]);
             const eyeR = toGlobal(landmarks[263]);
 
-            // 3D Perspective ロジック (前回の改善版)
             const faceCenterX = (jawL.x + jawR.x) / 2;
             const faceWidth2D = Math.abs(jawR.x - jawL.x);
-            const yawFactor = (noseTip.x - faceCenterX) / (faceWidth2D / 2);
-            const faceWidth3D = Math.hypot(jawR.x - jawL.x, (jawR.z - jawL.z) * roi.w);
+            const yawFactor = (noseTip.x - faceCenterX) / (faceWidth2D / 2); // -1(左) ～ 1(右)
+
+            // 奥行きを含めた物理幅の計算
+            const faceWidth3D = Math.hypot(jawR.x - jawL.x, (jawR.z - jawL.z));
             const angle = Math.atan2(eyeR.y - eyeL.y, eyeR.x - eyeL.x);
 
-            const expansion = 1.0 + Math.abs(yawFactor) * 0.3;
-            const baseSize = faceWidth3D * 0.8 * expansion;
-            const squeezeFactor = Math.max(0.4, Math.cos(yawFactor * (Math.PI / 2.2)));
+            // 【手前小鼻を隠すための補正】
+            // 顔が斜めになるほど全体のサイズを膨らませる
+            const expansion = 1.0 + Math.abs(yawFactor) * 0.45; 
+            const baseSize = faceWidth3D * 0.85 * expansion;
             
+            // 圧縮率の制限（マズルが細くなりすぎないように）
+            const squeezeFactor = Math.max(0.55, Math.cos(yawFactor * (Math.PI / 2.2)));
             const targetWidth = baseSize * squeezeFactor;
             const targetHeight = targetWidth / (muzzleImg.width / muzzleImg.height);
 
-            // 手前と奥を隠す強化オフセット
-            const totalXOffset = yawFactor * baseSize * 0.35;
+            // ダブルオフセット（奥の回り込み + 手前への突き出し）
+            // yawFactorがプラス（右向き）なら、マズルをさらに右へ押し出す
+            const wrapAround = yawFactor * baseSize * 0.30;
+            const foregroundPush = yawFactor * baseSize * 0.25; 
+            const totalXOffset = wrapAround + foregroundPush;
 
             ctx.save();
             ctx.translate(noseTip.x, noseTip.y);
             ctx.rotate(angle);
+            ctx.globalAlpha = 1.0;
+
             ctx.drawImage(
                 muzzleImg, 
                 -targetWidth / 2 + totalXOffset, 
-                -targetHeight / 2 + (targetHeight * 0.15), 
+                -targetHeight / 2 + (targetHeight * 0.18), 
                 targetWidth, 
                 targetHeight
             );
