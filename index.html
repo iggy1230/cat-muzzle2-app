@@ -2,34 +2,34 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>Cat Muzzle AI - Professional v31 Final</title>
+    <title>Cat Muzzle AI - Professional v60 Local-Link</title>
     <style>
-        body { font-family: 'Helvetica Neue', Arial, sans-serif; background: #0a0a0a; color: #eee; text-align: center; margin: 0; padding: 20px; }
+        body { font-family: 'Segoe UI', sans-serif; background: #0a0a0a; color: #eee; text-align: center; margin: 0; padding: 20px; }
         .card { background: #1a1a1a; padding: 25px; border-radius: 24px; max-width: 850px; margin: auto; box-shadow: 0 20px 60px rgba(0,0,0,0.8); border: 1px solid #333; }
-        #log { background: #000; color: #00ff66; font-family: 'Consolas', monospace; font-size: 11px; padding: 12px; height: 100px; overflow-y: auto; text-align: left; border-radius: 12px; margin-bottom: 20px; border: 1px solid #222; white-space: pre-wrap; }
+        #log { background: #000; color: #00ff66; font-family: monospace; font-size: 11px; padding: 12px; height: 110px; overflow-y: auto; text-align: left; border-radius: 12px; margin-bottom: 20px; border: 1px solid #222; white-space: pre-wrap; }
         .preview-box { position: relative; width: 100%; background: #000; border-radius: 16px; border: 1px solid #333; overflow: hidden; display: flex; flex-direction: column; align-items: center; }
-        canvas { width: 100%; height: auto; display: block; background: #000; }
-        .btn { padding: 18px 36px; background: #6200ee; color: white; border: none; border-radius: 14px; font-weight: bold; cursor: pointer; font-size: 16px; width: 90%; margin: 8px 0; transition: all 0.3s; }
-        .btn:hover:not(:disabled) { background: #7c4dff; transform: translateY(-2px); }
+        canvas { width: 100%; height: auto; display: block; }
+        .btn { padding: 18px 36px; background: #6200ee; color: white; border: none; border-radius: 14px; font-weight: bold; cursor: pointer; font-size: 16px; width: 90%; margin: 10px 0; transition: 0.3s; }
+        .btn:hover:not(:disabled) { background: #7c4dff; }
         .btn:disabled { background: #333; color: #777; cursor: wait; }
-        .btn-save { background: #00c853; display: none; }
         .progress-box { width: 90%; margin: 15px auto; display: none; }
-        .progress-bar { width: 100%; background: #444; height: 12px; border-radius: 6px; overflow: hidden; }
-        #progressFill { width: 0%; background: linear-gradient(90deg, #00e676, #00c853); height: 100%; transition: width 0.2s; }
-        #progressLabel { font-size:14px; margin-top:8px; color:#00e676; font-weight:bold; }
+        .progress-bar { width: 100%; background: #333; height: 10px; border-radius: 5px; overflow: hidden; }
+        #progressFill { width: 0%; background: #00e676; height: 100%; transition: width 0.2s; }
     </style>
+    <!-- ONNX Runtime Web (安定版) -->
+    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.17.1/dist/ort.min.js"></script>
 </head>
 <body>
     <div class="card">
-        <h2 style="margin-top:0;">🐱 CAT MUZZLE AI <span style="font-size:12px; color:#7c4dff;">v31 PRO STUDIO</span></h2>
+        <h2 style="margin-top:0;">🐱 CAT MUZZLE STUDIO <span style="font-size:12px; color:#7c4dff;">v60 LOCAL-LINK</span></h2>
         <div id="log">ログ: システム起動中...</div>
         
         <input type="file" id="fileInput" accept="image/*,video/*" hidden>
-        <button id="uploadBtn" class="btn" disabled>AIエンジンをロード中...</button>
+        <button id="uploadBtn" class="btn" disabled>エンジンをロード中...</button>
 
         <div class="progress-box" id="progressBox">
             <div class="progress-bar"><div id="progressFill"></div></div>
-            <div id="progressLabel">準備中...</div>
+            <div id="progressLabel" style="font-size:13px; margin-top:8px; color:#00e676; font-weight:bold;">YOLOv8 + MediaPipe 解析中...</div>
         </div>
 
         <div class="preview-box">
@@ -37,7 +37,7 @@
             <video id="video" playsinline muted style="display:none;"></video>
         </div>
 
-        <button id="downloadBtn" class="btn btn-save">📥 動画を書き出して保存</button>
+        <button id="downloadBtn" class="btn" style="background:#00c853; display:none;">📥 結果を保存する</button>
     </div>
 
     <script type="module">
@@ -51,15 +51,11 @@
         const downloadBtn = document.getElementById('downloadBtn');
         const progressBox = document.getElementById('progressBox');
         const progressFill = document.getElementById('progressFill');
-        const progressLabel = document.getElementById('progressLabel');
         const logArea = document.getElementById('log');
 
-        let faceLandmarker;
-        let muzzleImg = new Image();
-        muzzleImg.src = "muzzle.png"; 
-
+        let yoloSession, mpLandmarker;
+        let muzzleImg = new Image(); muzzleImg.src = "muzzle.png"; 
         let frameSequence = []; 
-        const FPS = 30;
 
         function addLog(msg) {
             logArea.innerText += `> ${msg}\n`;
@@ -68,270 +64,194 @@
 
         async function init() {
             try {
+                addLog("1/2: YOLOv8n-face (ONNX) ロード中...");
+                // 相対パスを確実に解決
+                yoloSession = await ort.InferenceSession.create('./models/yolov8n-face.onnx', { executionProviders: ['wasm'] });
+                
+                addLog("2/2: MediaPipe Landmarker ロード中...");
                 const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm");
-                faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
-                    baseOptions: { modelAssetPath: `https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task`, delegate: "GPU" },
-                    runningMode: "IMAGE", numFaces: 2
+                mpLandmarker = await FaceLandmarker.createFromOptions(vision, {
+                    baseOptions: { modelAssetPath: `./models/face_landmarker.task`, delegate: "GPU" },
+                    runningMode: "IMAGE", numFaces: 1
                 });
-                addLog("システム準備完了。");
+
+                addLog("システム準備完了。ローカルサーバー経由での実行を確認しました。");
                 uploadBtn.disabled = false;
-                uploadBtn.innerText = "動画・写真を選択";
+                uploadBtn.innerText = "動画・写真を選択して開始";
                 uploadBtn.onclick = () => fileInput.click();
-            } catch (e) { addLog("初期化失敗: " + e.message); }
+            } catch (e) { 
+                addLog("初期化失敗: " + e.message);
+                addLog("【重要】ファイルをダブルクリックではなく、ローカルサーバー(VS Code Live Server等)で開いてください。");
+            }
         }
 
         fileInput.onchange = (e) => {
             const file = e.target.files[0];
             if (!file) return;
-            downloadBtn.style.display = "none";
-            if (file.type.startsWith('image/')) processImage(URL.createObjectURL(file));
-            else startDeepScan(URL.createObjectURL(file));
+            startHybridAnalysis(URL.createObjectURL(file));
         };
 
-        // --- 1. 動画の精密スキャン（メイン処理） ---
-        async function startDeepScan(url) {
-            addLog("動画の解析を開始...");
-            video.src = url;
-            video.load();
-
+        async function startHybridAnalysis(url) {
+            addLog("精密解析プロセスを開始...");
+            video.src = url; video.load();
             video.onloadedmetadata = async () => {
-                canvas.width = video.videoWidth;
-                canvas.height = video.videoHeight;
-                frameSequence = [];
-                progressBox.style.display = "block";
+                canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+                frameSequence = []; progressBox.style.display = "block";
                 
-                const totalFrames = Math.floor(video.duration * FPS);
+                const fps = 30, totalFrames = Math.floor(video.duration * fps);
+                const roiCanvas = document.createElement('canvas');
+                const rCtx = roiCanvas.getContext('2d');
 
                 for (let i = 0; i <= totalFrames; i++) {
-                    video.currentTime = i / FPS;
-                    await new Promise(r => {
-                        const timeout = setTimeout(r, 1000); // 念のためのタイムアウト
-                        video.onseeked = () => { clearTimeout(timeout); r(); };
-                    });
+                    video.currentTime = i / fps;
+                    await new Promise(r => { video.onseeked = r; setTimeout(r, 800); });
+                    await new Promise(r => requestAnimationFrame(r));
 
-                    const results = faceLandmarker.detect(video);
-                    frameSequence.push({
-                        time: video.currentTime,
-                        rawFaces: results.faceLandmarks || []
-                    });
+                    // A. YOLOv8 推論
+                    const yoloResults = await runYoloV8(video);
+                    let facesInFrame = [];
 
-                    const percent = Math.floor((i / totalFrames) * 100);
-                    progressFill.style.width = percent + "%";
-                    progressLabel.innerText = `解析進捗: ${percent}% (${i}/${totalFrames})`;
-                    
-                    if (i % 20 === 0) await new Promise(r => setTimeout(r, 1));
+                    for (const box of yoloResults.slice(0, 2)) {
+                        const pad = 0.3;
+                        const rx = Math.max(0, box.x1 - box.w * pad);
+                        const ry = Math.max(0, box.y1 - box.h * pad);
+                        const rw = Math.min(canvas.width - rx, box.w * (1 + pad * 2));
+                        const rh = Math.min(canvas.height - ry, box.h * (1 + pad * 2));
+
+                        roiCanvas.width = rw; roiCanvas.height = rh;
+                        rCtx.drawImage(video, rx, ry, rw, rh, 0, 0, rw, rh);
+
+                        const lmRes = mpLandmarker.detect(roiCanvas);
+                        if (lmRes.faceLandmarks && lmRes.faceLandmarks[0]) {
+                            let f = extractMetrics(lmRes.faceLandmarks[0]);
+                            f.px = rx + (f.nx * rw); f.py = ry + (f.ny * rh);
+                            f.pScale = f.scale * rw; f.type = 'mp';
+                            facesInFrame.push(f);
+                        } else {
+                            // ランドマーク消失時はYOLOの鼻(landmarks[2])を使用
+                            facesInFrame.push({
+                                px: box.noseX, py: box.noseY, pScale: box.w * 0.85,
+                                angle: 0, yaw: (box.nx > 0.5 ? 0.8 : -0.8), pitch: 0.5, type: 'yolo'
+                            });
+                        }
+                    }
+                    frameSequence.push({ time: video.currentTime, faces: facesInFrame });
+                    progressFill.style.width = (i / totalFrames * 100) + "%";
+                    if (i % 10 === 0) await new Promise(r => setTimeout(r, 1));
                 }
-
-                addLog("解析完了。2人の軌跡を最適化中...");
-                optimizeTracks();
-                
-                addLog("準備完了。");
+                finalizeTracks();
+                addLog("解析・補間完了。");
                 progressBox.style.display = "none";
                 downloadBtn.style.display = "block";
-                
-                video.currentTime = 0;
-                video.play();
-                requestAnimationFrame(liveLoop);
+                video.currentTime = 0; video.play();
+                requestAnimationFrame(renderLoop);
             };
         }
 
-        function liveLoop() {
-            if (video.paused || video.ended) return;
-            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-            const frame = frameSequence.find(f => f.time >= video.currentTime) || frameSequence[frameSequence.length-1];
-            if (frame && frame.faces) {
-                frame.faces.forEach(f => { if (f) drawAsymmetricMuzzle(f); });
+        async function runYoloV8(source) {
+            const size = 640;
+            const off = document.createElement('canvas'); off.width = size; off.height = size;
+            const oCtx = off.getContext('2d');
+            oCtx.drawImage(source, 0, 0, size, size);
+            const imgData = oCtx.getImageData(0, 0, size, size);
+            const input = new Float32Array(size * size * 3);
+            for (let i = 0; i < size * size; i++) {
+                input[i] = imgData.data[i * 4] / 255.0;
+                input[i + size*size] = imgData.data[i * 4 + 1] / 255.0;
+                input[i + 2*size*size] = imgData.data[i * 4 + 2] / 255.0;
             }
-            requestAnimationFrame(liveLoop);
-        }
+            const output = await yoloSession.run({ images: new ort.Tensor('float32', input, [1, 3, size, size]) });
+            const data = output.output0.data; // [1, 16, 8400]
 
-        // --- 2. 書き出し処理（フリーズ回避版） ---
-        downloadBtn.onclick = async () => {
-            addLog("書き出しプロセスを開始（フリーズ回避モード）...");
-            downloadBtn.disabled = true;
-            progressBox.style.display = "block";
-            video.pause();
-
-            const chunks = [];
-            const stream = canvas.captureStream(0); 
-            // Chromeで最も安定するWebM設定
-            const recorder = new MediaRecorder(stream, { 
-                mimeType: 'video/webm;codecs=vp9', 
-                videoBitsPerSecond: 8000000 // 8Mbps
-            });
-
-            recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
-            recorder.onstop = () => {
-                const blob = new Blob(chunks, { type: 'video/webm' });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url; a.download = "cat_muzzle_pro.webm"; a.click();
-                addLog("保存が完了しました！");
-                downloadBtn.disabled = false;
-                progressBox.style.display = "none";
-            };
-
-            recorder.start();
-
-            // 1コマずつ丁寧に描画してキャプチャ
-            for (let i = 0; i < frameSequence.length; i++) {
-                const frame = frameSequence[i];
-                video.currentTime = frame.time;
-                
-                await new Promise(r => {
-                    const timeout = setTimeout(r, 1000);
-                    video.onseeked = () => { clearTimeout(timeout); r(); };
-                });
-
-                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-                if (frame.faces) {
-                    frame.faces.forEach(f => { if (f) drawAsymmetricMuzzle(f); });
+            let boxes = [];
+            for (let i = 0; i < 8400; i++) {
+                const score = data[4 * 8400 + i];
+                if (score > 0.45) {
+                    const w = data[2 * 8400 + i] * (canvas.width / size);
+                    const h = data[3 * 8400 + i] * (canvas.height / size);
+                    const cx = data[0 * 8400 + i] * (canvas.width / size);
+                    const cy = data[1 * 8400 + i] * (canvas.height / size);
+                    // 鼻(index 2) = ランドマークデータ開始(5) + 2*2
+                    const nx = data[(5 + 2*2) * 8400 + i] * (canvas.width / size);
+                    const ny = data[(5 + 2*2 + 1) * 8400 + i] * (canvas.height / size);
+                    boxes.push({ x1: cx - w/2, y1: cy - h/2, w, h, nx: cx/canvas.width, score, noseX: nx, noseY: ny });
                 }
-
-                // フレームをビデオトラックにプッシュ
-                stream.getVideoTracks()[0].requestFrame(); 
-                
-                const percent = Math.floor((i / frameSequence.length) * 100);
-                progressFill.style.width = percent + "%";
-                progressLabel.innerText = `書き出し中: ${percent}% (${i}/${frameSequence.length})`;
-                
-                // 【最重要】ブラウザに制御を戻す。これがないとフリーズする。
-                if (i % 3 === 0) await new Promise(r => setTimeout(r, 15));
             }
+            return boxes.sort((a,b) => b.score - a.score).slice(0, 5);
+        }
 
-            addLog("ファイルを生成しています...");
-            setTimeout(() => recorder.stop(), 1000);
-        };
-
-        // --- 3. 入れ替わり防止トラッキング ---
-        function optimizeTracks() {
-            const tracks = [[], []];
-            let lastPos = [null, null];
-
-            frameSequence.forEach((frame, idx) => {
-                let currentRaw = frame.rawFaces;
+        function finalizeTracks() {
+            let tracks = [[], []];
+            frameSequence.forEach((frame) => {
                 let assigned = [null, null];
-
-                if (idx > 0) {
-                    let available = currentRaw.map((_, i) => i);
-                    [0, 1].forEach(id => {
-                        if (lastPos[id]) {
-                            let bestMatch = -1, minDist = 0.2;
-                            available.forEach(fIdx => {
-                                const d = Math.hypot(currentRaw[fIdx][4].x - lastPos[id].x, currentRaw[fIdx][4].y - lastPos[id].y);
-                                if (d < minDist) { minDist = d; bestMatch = fIdx; }
-                            });
-                            if (bestMatch !== -1) {
-                                assigned[id] = extractMetrics(currentRaw[bestMatch]);
-                                available = available.filter(i => i !== bestMatch);
-                            }
-                        }
-                    });
-                    available.forEach(fIdx => {
-                        if (!assigned[0]) assigned[0] = extractMetrics(currentRaw[fIdx]);
-                        else if (!assigned[1]) assigned[1] = extractMetrics(currentRaw[fIdx]);
-                    });
-                } else {
-                    currentRaw.sort((a,b) => a[4].x - b[4].x);
-                    assigned[0] = currentRaw[0] ? extractMetrics(currentRaw[0]) : null;
-                    assigned[1] = currentRaw[1] ? extractMetrics(currentRaw[1]) : null;
-                }
-                
-                for(let id=0; id<2; id++) {
-                    tracks[id].push(assigned[id]);
-                    if (assigned[id]) lastPos[id] = { x: assigned[id].nx, y: assigned[id].ny };
-                }
+                frame.faces.forEach(face => {
+                    const id = face.px < canvas.width * 0.5 ? 0 : 1;
+                    if (!assigned[id] || face.pScale > assigned[id].pScale) assigned[id] = face;
+                });
+                tracks[0].push(assigned[0]); tracks[1].push(assigned[1]);
             });
-
-            // 【入れ替わり防止】全期間の平均位置で左右をソート
-            const avgX0 = getAvgX(tracks[0]);
-            const avgX1 = getAvgX(tracks[1]);
-            if (avgX1 !== 0 && avgX0 > avgX1) tracks.reverse();
-
-            // 補間と平滑化
             tracks.forEach(t => { 
                 for (let i = 1; i < t.length - 1; i++) {
                     if (!t[i]) {
                         let p = i - 1; while(p >= 0 && !t[p]) p--;
                         let n = i + 1; while(n < t.length && !t[n]) n++;
-                        if (p >= 0 && n < t.length) {
-                            const r = (i - p) / (n - p); t[i] = {};
-                            ['nx', 'ny', 'scale', 'yaw', 'pitch', 'roll'].forEach(k => {
-                                if (['roll', 'yaw', 'pitch'].includes(k)) {
-                                    let d = t[n][k] - t[p][k];
-                                    while(d > Math.PI) d -= Math.PI*2; while(d < -Math.PI) d += Math.PI*2;
-                                    t[i][k] = t[p][k] + d * r;
-                                } else { t[i][k] = t[p][k] + (t[n][k] - t[p][k]) * r; }
-                            });
+                        if (p >= 0 && n < t.length && (n - p) < 450) {
+                            t[i] = lerpPro(t[p], t[n], (i - p) / (n - p));
                         }
                     }
                 }
-                // 7フレーム平均
-                const win = 3, copy = JSON.parse(JSON.stringify(t));
-                for (let i = 0; i < t.length; i++) {
-                    if (!copy[i]) continue;
-                    let count = 0, sums = {nx:0, ny:0, scale:0, roll:0, yaw:0, pitch:0};
-                    for (let j = i-win; j <= i+win; j++) {
-                        if (copy[j]) {
-                            sums.nx += copy[j].nx; sums.ny += copy[j].ny; sums.scale += copy[j].scale;
-                            ['roll', 'yaw', 'pitch'].forEach(k => {
-                                let d = copy[j][k] - copy[i][k];
-                                while(d > Math.PI) d -= Math.PI*2; while(d < -Math.PI) d += Math.PI*2;
-                                sums[k] += copy[i][k] + d;
-                            });
-                            count++;
-                        }
-                    }
-                    t[i] = { ...copy[i], nx:sums.nx/count, ny:sums.ny/count, scale:sums.scale/count, roll:sums.roll/count, yaw:sums.yaw/count, pitch:sums.pitch/count };
-                }
+                smoothPro(t);
             });
-
             frameSequence.forEach((f, i) => f.faces = [tracks[0][i], tracks[1][i]]);
-        }
-
-        // --- 4. 非対称描画ロジック ---
-        function drawAsymmetricMuzzle(f) {
-            const px = f.nx * canvas.width, py = f.ny * canvas.height;
-            const yaw = Math.max(-1.2, Math.min(1.2, f.yaw));
-            const aspect = muzzleImg.width / muzzleImg.height;
-            const sxL = 1 - Math.max(0, -yaw) * 0.45, sxR = 1 - Math.max(0, yaw) * 0.45;
-            const baseSizePx = f.scale * canvas.width * 0.9;
-            const centerShiftX = yaw * baseSizePx * 0.12;
-            const scaleY = 1 - Math.abs(yaw) * 0.15;
-            const pitchShift = (f.pitch - 0.5) * baseSizePx * 0.25;
-            const dw = baseSizePx, dh = baseSizePx / aspect;
-
-            ctx.save();
-            ctx.translate(px + centerShiftX, py); ctx.rotate(f.roll);
-            ctx.globalAlpha = Math.max(0, Math.min(1.0, 1.8 - Math.abs(yaw)));
-            const imgW = muzzleImg.width, imgH = muzzleImg.height;
-            ctx.save(); ctx.scale(sxL, scaleY);
-            ctx.drawImage(muzzleImg, 0, 0, imgW/2, imgH, -dw/2, -dh/2 + (dh*0.15) + pitchShift, dw/2, dh);
-            ctx.restore();
-            ctx.save(); ctx.scale(sxR, scaleY);
-            ctx.drawImage(muzzleImg, imgW/2, 0, imgW/2, imgH, 0, -dh/2 + (dh*0.15) + pitchShift, dw/2, dh);
-            ctx.restore(); ctx.restore();
         }
 
         function extractMetrics(lm) {
             const nx = (lm[4].x + lm[1].x + lm[195].x)/3, ny = (lm[4].y + lm[1].y + lm[195].y)/3;
-            const eyeL = lm[33], eyeR = lm[263], jawL = lm[234], jawR = lm[454], chin = lm[152];
-            const yaw3D = Math.atan2(eyeR.z - eyeL.z, eyeR.x - eyeL.x), yaw2D = (lm[4].x - (eyeL.x + eyeR.x)*0.5) / (Math.abs(jawR.x - jawL.x)*0.5 || 0.1);
-            return { nx, ny, yaw: yaw2D*0.6 + yaw3D*0.4, pitch: Math.atan2(chin.z - lm[4].z, chin.y - lm[4].y), scale: Math.abs(jawR.x - jawL.x)*0.4 + Math.abs(lm[323].x - lm[93].x)*0.4 + Math.abs(eyeR.x - eyeL.x)*0.2, roll: Math.atan2((eyeR.y - eyeL.y)*canvas.height, (eyeR.x - eyeL.x)*canvas.width) };
+            return { nx, ny, scale: Math.abs(lm[454].x - lm[234].x), angle: Math.atan2((lm[263].y - lm[33].y), (lm[263].x - lm[33].x)), yaw: (lm[4].x - (lm[33].x + lm[263].x)*0.5) / (Math.abs(lm[454].x - lm[234].x)*0.5 || 1), pitch: Math.atan2(lm[152].z - lm[4].z, lm[152].y - lm[4].y) };
         }
-        function getAvgX(t) { let s = 0, c = 0; t.forEach(f => { if(f){ s += f.nx; c++; }}); return c > 0 ? s / c : 0; }
+        function lerpPro(a, b, t) {
+            let d = b.angle - a.angle; while(d > Math.PI) d -= Math.PI*2; while(d < -Math.PI) d += Math.PI*2;
+            return { px: a.px+(b.px-a.px)*t, py: a.py+(b.py-a.py)*t, pScale: a.pScale+(b.pScale-a.pScale)*t, angle: a.angle+d*t, yaw: a.yaw+(b.yaw-a.yaw)*t, pitch: a.pitch+(b.pitch-a.pitch)*t, isGhost: true };
+        }
+        function smoothPro(t) {
+            const win = 3, copy = JSON.parse(JSON.stringify(t));
+            for(let i=0; i<t.length; i++) {
+                if(!copy[i]) continue;
+                let count=0, sums={px:0,py:0,pScale:0,angle:0,yaw:0,pitch:0};
+                for(let j=i-win; j<=i+win; j++){
+                    if(copy[j]){ sums.px+=copy[j].px; sums.py+=copy[j].py; sums.pScale+=copy[j].pScale; sums.yaw+=copy[j].yaw; sums.pitch+=copy[j].pitch;
+                    let d = copy[j].angle-copy[i].angle; while(d > Math.PI) d -= Math.PI*2; while(d < -Math.PI) d += Math.PI*2;
+                    sums.angle += copy[i].angle+d; count++; }
+                }
+                t[i].px=sums.px/count; t[i].py=sums.py/count; t[i].pScale=sums.pScale/count;
+            }
+        }
 
-        async function processImage(url) {
-            const img = new Image();
-            img.onload = () => {
-                canvas.width = img.width; canvas.height = img.height;
-                const results = faceLandmarker.detect(img);
-                ctx.drawImage(img, 0, 0);
-                if (results.faceLandmarks) results.faceLandmarks.forEach(lm => drawAsymmetricMuzzle(extractMetrics(lm)));
-                downloadBtn.style.display = "block"; downloadBtn.innerText = "📥 画像を保存";
-                downloadBtn.onclick = () => { const a = document.createElement('a'); a.href = canvas.toDataURL("image/png"); a.download = "result.png"; a.click(); };
-            };
-            img.src = url;
+        function renderLoop() {
+            if (video.paused || video.ended) return;
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            const frame = frameSequence.find(f => f.time >= video.currentTime) || frameSequence[frameSequence.length-1];
+            if (frame) frame.faces.forEach(face => { if (face) drawFinalMuzzle(face); });
+            requestAnimationFrame(renderLoop);
+        }
+
+        function drawFinalMuzzle(f) {
+            const px = f.px, py = f.py;
+            const yaw = Math.max(-1.2, Math.min(1.2, f.yaw));
+            const sxL = 1 - Math.max(0, -yaw)*0.55, sxR = 1 - Math.max(0, yaw)*0.55;
+            const baseSizePx = f.pScale * 0.9, dw = baseSizePx, dh = dw / (muzzleImg.width/muzzleImg.height);
+            const pitchShift = (f.pitch - 0.5) * baseSizePx * 0.25;
+
+            ctx.save();
+            ctx.translate(px + yaw*dw*0.12, py); ctx.rotate(f.angle || 0);
+            ctx.globalAlpha = f.isGhost ? 0.6 : 1.0;
+            const imgW = muzzleImg.width, imgH = muzzleImg.height;
+            ctx.save(); ctx.scale(sxL, 1-Math.abs(yaw)*0.15);
+            ctx.drawImage(muzzleImg, 0, 0, imgW/2, imgH, -dw/2, -dh/2 + (dh * 0.12) + pitchShift, dw/2, dh);
+            ctx.restore();
+            ctx.save(); ctx.scale(sxR, 1-Math.abs(yaw)*0.15);
+            ctx.drawImage(muzzleImg, imgW/2, 0, imgW/2, imgH, 0, -dh/2 + (dh * 0.12) + pitchShift, dw/2, dh);
+            ctx.restore(); ctx.restore();
         }
 
         init();
