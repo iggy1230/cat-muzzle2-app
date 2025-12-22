@@ -2,26 +2,25 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>Cat Muzzle AI - Professional v60 Local-Link</title>
+    <title>Cat Muzzle AI - Professional v94 Final Stable</title>
     <style>
-        body { font-family: 'Segoe UI', sans-serif; background: #0a0a0a; color: #eee; text-align: center; margin: 0; padding: 20px; }
-        .card { background: #1a1a1a; padding: 25px; border-radius: 24px; max-width: 850px; margin: auto; box-shadow: 0 20px 60px rgba(0,0,0,0.8); border: 1px solid #333; }
-        #log { background: #000; color: #00ff66; font-family: monospace; font-size: 11px; padding: 12px; height: 110px; overflow-y: auto; text-align: left; border-radius: 12px; margin-bottom: 20px; border: 1px solid #222; white-space: pre-wrap; }
-        .preview-box { position: relative; width: 100%; background: #000; border-radius: 16px; border: 1px solid #333; overflow: hidden; display: flex; flex-direction: column; align-items: center; }
-        canvas { width: 100%; height: auto; display: block; }
-        .btn { padding: 18px 36px; background: #6200ee; color: white; border: none; border-radius: 14px; font-weight: bold; cursor: pointer; font-size: 16px; width: 90%; margin: 10px 0; transition: 0.3s; }
-        .btn:hover:not(:disabled) { background: #7c4dff; }
+        body { font-family: 'Segoe UI', sans-serif; background: #020202; color: #eee; text-align: center; margin: 0; padding: 10px; }
+        .card { background: #111; padding: 25px; border-radius: 28px; max-width: 850px; margin: auto; border: 1px solid #333; box-shadow: 0 40px 100px rgba(0,0,0,0.9); }
+        #log { background: #000; color: #00ff66; font-family: 'Consolas', monospace; font-size: 11px; padding: 10px; height: 120px; overflow-y: auto; text-align: left; border-radius: 12px; margin-bottom: 20px; border: 1px solid #222; white-space: pre-wrap; }
+        .preview-box { position: relative; width: 100%; background: #000; border-radius: 20px; border: 1px solid #333; overflow: hidden; display: flex; flex-direction: column; align-items: center; min-height: 400px; }
+        canvas { width: 100%; height: auto; display: block; image-rendering: -webkit-optimize-contrast; }
+        .btn { padding: 18px 36px; background: #6200ee; color: white; border: none; border-radius: 15px; font-weight: bold; cursor: pointer; font-size: 16px; width: 85%; margin: 10px 0; transition: 0.3s; }
+        .btn:hover:not(:disabled) { background: #7c4dff; transform: translateY(-2px); }
         .btn:disabled { background: #333; color: #777; cursor: wait; }
         .progress-box { width: 90%; margin: 15px auto; display: none; }
-        .progress-bar { width: 100%; background: #333; height: 10px; border-radius: 5px; overflow: hidden; }
-        #progressFill { width: 0%; background: #00e676; height: 100%; transition: width 0.2s; }
+        .progress-bar { width: 100%; background: #222; height: 10px; border-radius: 4px; overflow: hidden; }
+        #progressFill { width: 0%; background: #00e676; height: 100%; }
+        #downloadBtn { background: #00c853; display: none; }
     </style>
-    <!-- ONNX Runtime Web (安定版) -->
-    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.17.1/dist/ort.min.js"></script>
 </head>
 <body>
     <div class="card">
-        <h2 style="margin-top:0;">🐱 CAT MUZZLE STUDIO <span style="font-size:12px; color:#7c4dff;">v60 LOCAL-LINK</span></h2>
+        <h2 style="margin-top:0;">🐱 CAT MUZZLE STUDIO <span style="font-size:12px; color:#7c4dff;">v94 FINAL-STABLE</span></h2>
         <div id="log">ログ: システム起動中...</div>
         
         <input type="file" id="fileInput" accept="image/*,video/*" hidden>
@@ -29,15 +28,15 @@
 
         <div class="progress-box" id="progressBox">
             <div class="progress-bar"><div id="progressFill"></div></div>
-            <div id="progressLabel" style="font-size:13px; margin-top:8px; color:#00e676; font-weight:bold;">YOLOv8 + MediaPipe 解析中...</div>
+            <div id="progressLabel" style="font-size:13px; margin-top:8px; color:#00e676;">解析中...</div>
         </div>
 
         <div class="preview-box">
             <canvas id="canvas"></canvas>
-            <video id="video" playsinline muted style="display:none;"></video>
+            <video id="video" playsinline style="display:none;"></video>
         </div>
 
-        <button id="downloadBtn" class="btn" style="background:#00c853; display:none;">📥 結果を保存する</button>
+        <button id="downloadBtn" class="btn">📥 音声入り動画を生成して保存</button>
     </div>
 
     <script type="module">
@@ -51,11 +50,15 @@
         const downloadBtn = document.getElementById('downloadBtn');
         const progressBox = document.getElementById('progressBox');
         const progressFill = document.getElementById('progressFill');
+        const progressLabel = document.getElementById('progressLabel');
         const logArea = document.getElementById('log');
 
-        let yoloSession, mpLandmarker;
+        let faceLandmarker;
         let muzzleImg = new Image(); muzzleImg.src = "muzzle.png"; 
-        let frameSequence = []; 
+
+        let frameData = []; 
+        let isExporting = false;
+        let audioCtx, audioSource, audioDest;
 
         function addLog(msg) {
             logArea.innerText += `> ${msg}\n`;
@@ -64,195 +67,196 @@
 
         async function init() {
             try {
-                addLog("1/2: YOLOv8n-face (ONNX) ロード中...");
-                // 相対パスを確実に解決
-                yoloSession = await ort.InferenceSession.create('./models/yolov8n-face.onnx', { executionProviders: ['wasm'] });
-                
-                addLog("2/2: MediaPipe Landmarker ロード中...");
                 const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm");
-                mpLandmarker = await FaceLandmarker.createFromOptions(vision, {
+                faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
                     baseOptions: { modelAssetPath: `./models/face_landmarker.task`, delegate: "GPU" },
-                    runningMode: "IMAGE", numFaces: 1
+                    runningMode: "IMAGE", numFaces: 2, minFaceDetectionConfidence: 0.15
                 });
-
-                addLog("システム準備完了。ローカルサーバー経由での実行を確認しました。");
+                addLog("システム準備完了。");
                 uploadBtn.disabled = false;
-                uploadBtn.innerText = "動画・写真を選択して開始";
                 uploadBtn.onclick = () => fileInput.click();
-            } catch (e) { 
-                addLog("初期化失敗: " + e.message);
-                addLog("【重要】ファイルをダブルクリックではなく、ローカルサーバー(VS Code Live Server等)で開いてください。");
-            }
+            } catch (e) { addLog("初期化失敗: " + e.message); }
         }
 
         fileInput.onchange = (e) => {
             const file = e.target.files[0];
             if (!file) return;
-            startHybridAnalysis(URL.createObjectURL(file));
+            downloadBtn.style.display = "none";
+            startAnalysis(URL.createObjectURL(file));
         };
 
-        async function startHybridAnalysis(url) {
-            addLog("精密解析プロセスを開始...");
+        // --- 1. 事前解析フェーズ ---
+        async function startAnalysis(url) {
+            addLog("解析を開始...");
             video.src = url; video.load();
             video.onloadedmetadata = async () => {
                 canvas.width = video.videoWidth; canvas.height = video.videoHeight;
-                frameSequence = []; progressBox.style.display = "block";
-                
-                const fps = 30, totalFrames = Math.floor(video.duration * fps);
-                const roiCanvas = document.createElement('canvas');
-                const rCtx = roiCanvas.getContext('2d');
+                frameData = []; progressBox.style.display = "block";
+                const fps = 12, totalSteps = Math.floor(video.duration * fps);
 
-                for (let i = 0; i <= totalFrames; i++) {
+                for (let i = 0; i <= totalSteps; i++) {
                     video.currentTime = i / fps;
-                    await new Promise(r => { video.onseeked = r; setTimeout(r, 800); });
+                    await new Promise(r => {
+                        const t = setTimeout(r, 1000);
+                        video.onseeked = () => { clearTimeout(t); r(); };
+                    });
                     await new Promise(r => requestAnimationFrame(r));
-
-                    // A. YOLOv8 推論
-                    const yoloResults = await runYoloV8(video);
-                    let facesInFrame = [];
-
-                    for (const box of yoloResults.slice(0, 2)) {
-                        const pad = 0.3;
-                        const rx = Math.max(0, box.x1 - box.w * pad);
-                        const ry = Math.max(0, box.y1 - box.h * pad);
-                        const rw = Math.min(canvas.width - rx, box.w * (1 + pad * 2));
-                        const rh = Math.min(canvas.height - ry, box.h * (1 + pad * 2));
-
-                        roiCanvas.width = rw; roiCanvas.height = rh;
-                        rCtx.drawImage(video, rx, ry, rw, rh, 0, 0, rw, rh);
-
-                        const lmRes = mpLandmarker.detect(roiCanvas);
-                        if (lmRes.faceLandmarks && lmRes.faceLandmarks[0]) {
-                            let f = extractMetrics(lmRes.faceLandmarks[0]);
-                            f.px = rx + (f.nx * rw); f.py = ry + (f.ny * rh);
-                            f.pScale = f.scale * rw; f.type = 'mp';
-                            facesInFrame.push(f);
-                        } else {
-                            // ランドマーク消失時はYOLOの鼻(landmarks[2])を使用
-                            facesInFrame.push({
-                                px: box.noseX, py: box.noseY, pScale: box.w * 0.85,
-                                angle: 0, yaw: (box.nx > 0.5 ? 0.8 : -0.8), pitch: 0.5, type: 'yolo'
-                            });
-                        }
-                    }
-                    frameSequence.push({ time: video.currentTime, faces: facesInFrame });
-                    progressFill.style.width = (i / totalFrames * 100) + "%";
-                    if (i % 10 === 0) await new Promise(r => setTimeout(r, 1));
+                    const res = faceLandmarker.detect(video);
+                    frameData.push({ time: video.currentTime, faces: (res.faceLandmarks || []).map(lm => extractMetrics(lm)) });
+                    progressFill.style.width = (i/totalSteps*100) + "%";
+                    progressLabel.innerText = `解析中: ${Math.floor(i/totalSteps*100)}%`;
                 }
+
                 finalizeTracks();
-                addLog("解析・補間完了。");
+                addLog("解析完了。保存ボタンを準備しました。");
                 progressBox.style.display = "none";
                 downloadBtn.style.display = "block";
-                video.currentTime = 0; video.play();
-                requestAnimationFrame(renderLoop);
+                video.currentTime = 0;
+                video.muted = true; // プレビュー時はミュート
+                video.play();
+                requestAnimationFrame(liveLoop);
             };
-        }
-
-        async function runYoloV8(source) {
-            const size = 640;
-            const off = document.createElement('canvas'); off.width = size; off.height = size;
-            const oCtx = off.getContext('2d');
-            oCtx.drawImage(source, 0, 0, size, size);
-            const imgData = oCtx.getImageData(0, 0, size, size);
-            const input = new Float32Array(size * size * 3);
-            for (let i = 0; i < size * size; i++) {
-                input[i] = imgData.data[i * 4] / 255.0;
-                input[i + size*size] = imgData.data[i * 4 + 1] / 255.0;
-                input[i + 2*size*size] = imgData.data[i * 4 + 2] / 255.0;
-            }
-            const output = await yoloSession.run({ images: new ort.Tensor('float32', input, [1, 3, size, size]) });
-            const data = output.output0.data; // [1, 16, 8400]
-
-            let boxes = [];
-            for (let i = 0; i < 8400; i++) {
-                const score = data[4 * 8400 + i];
-                if (score > 0.45) {
-                    const w = data[2 * 8400 + i] * (canvas.width / size);
-                    const h = data[3 * 8400 + i] * (canvas.height / size);
-                    const cx = data[0 * 8400 + i] * (canvas.width / size);
-                    const cy = data[1 * 8400 + i] * (canvas.height / size);
-                    // 鼻(index 2) = ランドマークデータ開始(5) + 2*2
-                    const nx = data[(5 + 2*2) * 8400 + i] * (canvas.width / size);
-                    const ny = data[(5 + 2*2 + 1) * 8400 + i] * (canvas.height / size);
-                    boxes.push({ x1: cx - w/2, y1: cy - h/2, w, h, nx: cx/canvas.width, score, noseX: nx, noseY: ny });
-                }
-            }
-            return boxes.sort((a,b) => b.score - a.score).slice(0, 5);
-        }
-
-        function finalizeTracks() {
-            let tracks = [[], []];
-            frameSequence.forEach((frame) => {
-                let assigned = [null, null];
-                frame.faces.forEach(face => {
-                    const id = face.px < canvas.width * 0.5 ? 0 : 1;
-                    if (!assigned[id] || face.pScale > assigned[id].pScale) assigned[id] = face;
-                });
-                tracks[0].push(assigned[0]); tracks[1].push(assigned[1]);
-            });
-            tracks.forEach(t => { 
-                for (let i = 1; i < t.length - 1; i++) {
-                    if (!t[i]) {
-                        let p = i - 1; while(p >= 0 && !t[p]) p--;
-                        let n = i + 1; while(n < t.length && !t[n]) n++;
-                        if (p >= 0 && n < t.length && (n - p) < 450) {
-                            t[i] = lerpPro(t[p], t[n], (i - p) / (n - p));
-                        }
-                    }
-                }
-                smoothPro(t);
-            });
-            frameSequence.forEach((f, i) => f.faces = [tracks[0][i], tracks[1][i]]);
         }
 
         function extractMetrics(lm) {
             const nx = (lm[4].x + lm[1].x + lm[195].x)/3, ny = (lm[4].y + lm[1].y + lm[195].y)/3;
-            return { nx, ny, scale: Math.abs(lm[454].x - lm[234].x), angle: Math.atan2((lm[263].y - lm[33].y), (lm[263].x - lm[33].x)), yaw: (lm[4].x - (lm[33].x + lm[263].x)*0.5) / (Math.abs(lm[454].x - lm[234].x)*0.5 || 1), pitch: Math.atan2(lm[152].z - lm[4].z, lm[152].y - lm[4].y) };
+            const w = Math.abs(lm[454].x - lm[234].x);
+            return { nx, ny, scale: w, angle: Math.atan2((lm[263].y - lm[33].y), (lm[263].x - lm[33].x)), yaw: (lm[4].x - (lm[33].x+lm[263].x)*0.5)/(w*0.5||1), pitch: Math.atan2(lm[152].z-lm[4].z, lm[152].y-lm[4].y) };
         }
-        function lerpPro(a, b, t) {
-            let d = b.angle - a.angle; while(d > Math.PI) d -= Math.PI*2; while(d < -Math.PI) d += Math.PI*2;
-            return { px: a.px+(b.px-a.px)*t, py: a.py+(b.py-a.py)*t, pScale: a.pScale+(b.pScale-a.pScale)*t, angle: a.angle+d*t, yaw: a.yaw+(b.yaw-a.yaw)*t, pitch: a.pitch+(b.pitch-a.pitch)*t, isGhost: true };
-        }
-        function smoothPro(t) {
-            const win = 3, copy = JSON.parse(JSON.stringify(t));
-            for(let i=0; i<t.length; i++) {
-                if(!copy[i]) continue;
-                let count=0, sums={px:0,py:0,pScale:0,angle:0,yaw:0,pitch:0};
-                for(let j=i-win; j<=i+win; j++){
-                    if(copy[j]){ sums.px+=copy[j].px; sums.py+=copy[j].py; sums.pScale+=copy[j].pScale; sums.yaw+=copy[j].yaw; sums.pitch+=copy[j].pitch;
-                    let d = copy[j].angle-copy[i].angle; while(d > Math.PI) d -= Math.PI*2; while(d < -Math.PI) d += Math.PI*2;
-                    sums.angle += copy[i].angle+d; count++; }
+
+        function finalizeTracks() {
+            let tracks = [[], []]; let lastData = [null, null];
+            frameData.forEach((frame, idx) => {
+                let current = frame.faces, assigned = [null, null];
+                if (idx === 0) { current.sort((a,b) => a.nx - b.nx); assigned[0]=current[0]; assigned[1]=current[1]; }
+                else {
+                    current.forEach(face => {
+                        let bestId = -1, minDist = 0.2;
+                        for(let id=0; id<2; id++) {
+                            if (lastData[id]) {
+                                const d = Math.hypot(face.nx - lastData[id].nx, face.ny - lastData[id].ny);
+                                if (d < minDist) { minDist = d; bestId = id; }
+                            }
+                        }
+                        if (bestId !== -1 && !assigned[bestId]) assigned[bestId] = face;
+                        else if (!assigned[0]) assigned[0] = face; else if (!assigned[1]) assigned[1] = face;
+                    });
                 }
-                t[i].px=sums.px/count; t[i].py=sums.py/count; t[i].pScale=sums.pScale/count;
-            }
+                for(let id=0; id<2; id++) {
+                    if (!assigned[id] && lastData[id] && lastData[id].life > 0) assigned[id] = { ...lastData[id], life: lastData[id].life - 1, isGhost: true };
+                    else if (assigned[id]) { assigned[id].life = 60; assigned[id].isGhost = false; }
+                    tracks[id].push(assigned[id]);
+                    if (assigned[id]) lastData[id] = assigned[id];
+                }
+            });
+            tracks.forEach(track => {
+                for (let i = 1; i < track.length - 1; i++) {
+                    if (!track[i]) {
+                        let p1 = i - 1; while(p1 >= 0 && !track[p1]) p1--;
+                        let p2 = i; while(p2 < track.length && !track[p2]) p2++;
+                        if (p1 >= 0 && p2 < track.length) track[i] = lerpPro(track[p1], track[p2], (i - p1) / (p2 - p1));
+                    }
+                }
+            });
+            frameData.forEach((f, i) => f.faces = [tracks[0][i], tracks[1][i]]);
         }
+        function lerpPro(a, b, t) { return { nx: a.nx+(b.nx-a.nx)*t, ny: a.ny+(b.ny-a.ny)*t, scale: a.scale+(b.scale-a.scale)*t, angle: a.angle, yaw: a.yaw, pitch: a.pitch, isGhost: true }; }
 
-        function renderLoop() {
-            if (video.paused || video.ended) return;
+        function liveLoop() {
+            if (video.paused || video.ended || isExporting) return;
             ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-            const frame = frameSequence.find(f => f.time >= video.currentTime) || frameSequence[frameSequence.length-1];
-            if (frame) frame.faces.forEach(face => { if (face) drawFinalMuzzle(face); });
-            requestAnimationFrame(renderLoop);
+            const frame = frameData.find(f => f.time >= video.currentTime) || frameData[frameData.length-1];
+            if (frame) frame.faces.forEach(face => { if (face) drawMuzzle(face); });
+            requestAnimationFrame(liveLoop);
         }
 
-        function drawFinalMuzzle(f) {
-            const px = f.px, py = f.py;
+        function drawMuzzle(f) {
+            const px = f.nx * canvas.width, py = f.ny * canvas.height;
+            const aspect = muzzleImg.width / muzzleImg.height;
             const yaw = Math.max(-1.2, Math.min(1.2, f.yaw));
+            const baseSizePx = f.scale * canvas.width * 0.9, dw = baseSizePx, dh = dw / aspect;
             const sxL = 1 - Math.max(0, -yaw)*0.55, sxR = 1 - Math.max(0, yaw)*0.55;
-            const baseSizePx = f.pScale * 0.9, dw = baseSizePx, dh = dw / (muzzleImg.width/muzzleImg.height);
-            const pitchShift = (f.pitch - 0.5) * baseSizePx * 0.25;
-
+            const scaleY = (1 - Math.abs(yaw) * 0.15) * (1.0 + (f.pitch - 0.5) * 0.35);
             ctx.save();
-            ctx.translate(px + yaw*dw*0.12, py); ctx.rotate(f.angle || 0);
-            ctx.globalAlpha = f.isGhost ? 0.6 : 1.0;
+            ctx.translate(px + yaw*dw*0.16, py); ctx.rotate(f.angle || 0);
             const imgW = muzzleImg.width, imgH = muzzleImg.height;
-            ctx.save(); ctx.scale(sxL, 1-Math.abs(yaw)*0.15);
-            ctx.drawImage(muzzleImg, 0, 0, imgW/2, imgH, -dw/2, -dh/2 + (dh * 0.12) + pitchShift, dw/2, dh);
+            ctx.save(); ctx.scale(sxL, scaleY);
+            ctx.drawImage(muzzleImg, 0, 0, imgW/2, imgH, -dw/2, -dh/2 + (dh*0.1), dw/2, dh);
             ctx.restore();
-            ctx.save(); ctx.scale(sxR, 1-Math.abs(yaw)*0.15);
-            ctx.drawImage(muzzleImg, imgW/2, 0, imgW/2, imgH, 0, -dh/2 + (dh * 0.12) + pitchShift, dw/2, dh);
+            ctx.save(); ctx.scale(sxR, scaleY);
+            ctx.drawImage(muzzleImg, imgW/2, 0, imgW/2, imgH, 0, -dh/2 + (dh*0.1), dw/2, dh);
             ctx.restore(); ctx.restore();
         }
+
+        // --- 2. 修正版：実時間保存ロジック (1KB問題を解決) ---
+        downloadBtn.onclick = async () => {
+            addLog("書き出しを開始... 動画が最後まで再生されるのをお待ちください。");
+            downloadBtn.disabled = true;
+            isExporting = true;
+            
+            // Audio設定の再利用ガード
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                audioDest = audioCtx.createMediaStreamDestination();
+                audioSource = audioCtx.createMediaElementSource(video);
+                audioSource.connect(audioDest);
+                audioSource.connect(audioCtx.destination);
+            }
+            await audioCtx.resume();
+
+            // 映像ストリーム (手動ではなく自動キャプチャにする)
+            const videoStream = canvas.captureStream(30); 
+            const combined = new MediaStream([
+                ...videoStream.getVideoTracks(),
+                ...audioDest.stream.getAudioTracks()
+            ]);
+
+            let mimeType = 'video/webm;codecs=vp9';
+            if (!MediaRecorder.isTypeSupported(mimeType)) mimeType = 'video/webm';
+
+            const recorder = new MediaRecorder(combined, { mimeType, videoBitsPerSecond: 10000000 });
+            const localChunks = [];
+            
+            recorder.ondataavailable = e => { if(e.data.size > 0) localChunks.push(e.data); };
+            recorder.onstop = () => {
+                addLog("Blobファイルを生成中...");
+                const blob = new Blob(localChunks, { type: mimeType });
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = "cat_muzzle_studio.webm";
+                a.click();
+                addLog("保存完了しました！");
+                downloadBtn.disabled = false;
+                isExporting = false;
+                video.muted = true; // 再びプレビュー用に消音
+            };
+
+            // 録画準備：最初に戻す
+            video.pause();
+            video.currentTime = 0;
+            video.muted = false; // 音を出すことでAudioContextに流す
+            video.playbackRate = 1.0;
+
+            await new Promise(r => video.onseeked = r);
+            
+            recorder.start();
+            video.play();
+
+            // 録画中の描画ループ (liveLoopを流用せず専用で回す)
+            const exportRender = () => {
+                if (!isExporting) return;
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                const frame = frameData.find(f => f.time >= video.currentTime) || frameData[frameData.length-1];
+                if (frame) frame.faces.forEach(face => { if (face) drawMuzzle(face); });
+                
+                if (video.ended) {
+                    setTimeout(() => recorder.stop(), 500); // 余裕を持って停止
+                } else {
+                    requestAnimationFrame(exportRender);
+                }
+            };
+            exportRender();
+        };
 
         init();
     </script>
