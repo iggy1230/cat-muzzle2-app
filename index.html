@@ -2,23 +2,27 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>Cat Muzzle AI - Stable Anchor v109</title>
+    <title>Cat Muzzle AI - Professional Studio v115 Stable</title>
     <style>
-        body { font-family: sans-serif; background: #0a0a0a; color: #eee; text-align: center; margin: 0; padding: 20px; }
-        .card { background: #1a1a1a; padding: 25px; border-radius: 24px; max-width: 850px; margin: auto; box-shadow: 0 10px 40px rgba(0,0,0,0.5); border: 1px solid #333; }
-        #log { background: #000; color: #00ff66; font-family: monospace; font-size: 11px; padding: 10px; height: 100px; overflow-y: auto; text-align: left; border-radius: 12px; margin-bottom: 20px; border: 1px solid #222; white-space: pre-wrap; }
-        .preview-box { position: relative; width: 100%; background: #000; border-radius: 12px; border: 2px solid #444; overflow: hidden; display: flex; justify-content: center; align-items: center; min-height: 400px; }
-        canvas { width: 100%; height: auto; display: block; }
-        .btn { padding: 16px 32px; background: #6200ee; color: white; border: none; border-radius: 12px; font-weight: bold; cursor: pointer; font-size: 16px; width: 85%; margin: 10px 0; }
+        body { font-family: 'Segoe UI', sans-serif; background: #0a0a0a; color: #eee; text-align: center; margin: 0; padding: 10px; }
+        .card { background: #1a1a1a; padding: 25px; border-radius: 24px; max-width: 850px; margin: auto; box-shadow: 0 10px 40px rgba(0,0,0,0.5); }
+        #log { background: #000; color: #00ff66; font-family: 'Consolas', monospace; font-size: 11px; padding: 10px; height: 120px; overflow-y: auto; text-align: left; border-radius: 12px; margin-bottom: 20px; border: 1px solid #333; white-space: pre-wrap; }
+        .preview-box { position: relative; width: 100%; background: #000; border-radius: 16px; border: 1px solid #333; overflow: hidden; display: flex; flex-direction: column; align-items: center; min-height: 400px; }
+        canvas { width: 100%; height: auto; display: block; image-rendering: -webkit-optimize-contrast; }
+        .btn { padding: 16px 32px; background: #6200ee; color: white; border: none; border-radius: 12px; font-weight: bold; cursor: pointer; font-size: 16px; width: 85%; margin: 10px 0; transition: 0.3s; }
+        .btn:hover:not(:disabled) { background: #7c4dff; transform: translateY(-2px); }
         .btn:disabled { background: #333; color: #777; cursor: wait; }
-        .progress-box { width: 85%; margin: 15px auto; display: none; }
+        .progress-box { width: 90%; margin: 15px auto; display: none; }
         .progress-bar { width: 100%; background: #333; height: 10px; border-radius: 5px; overflow: hidden; }
         #progressFill { width: 0%; background: #00e676; height: 100%; transition: width 0.2s; }
+        #progressLabel { font-size:13px; margin-top:8px; color:#00e676; font-weight:bold; }
+        #downloadBtn { background: #00c853; display: none; }
+        #replayBtn { background: #007bff; display: none; }
     </style>
 </head>
 <body>
     <div class="card">
-        <h2 style="margin-top:0;">🐱 CAT MUZZLE AI <span style="font-size:12px; color:#7c4dff;">v109 STABLE-SMOOTH</span></h2>
+        <h2 style="margin-top:0;">🐱 CAT MUZZLE AI <span style="font-size:12px; color:#7c4dff;">v115 FINAL-STABLE</span></h2>
         <div id="log">ログ: システム起動中...</div>
         
         <input type="file" id="fileInput" accept="image/*,video/*" hidden>
@@ -26,7 +30,7 @@
 
         <div class="progress-box" id="progressBox">
             <div class="progress-bar"><div id="progressFill"></div></div>
-            <div id="progressLabel" style="font-size:14px; margin-top:8px; color:#00e676; font-weight:bold;">動画の姿勢を精密スキャン中...</div>
+            <div id="progressLabel">準備中...</div>
         </div>
 
         <div class="preview-box">
@@ -34,7 +38,8 @@
             <video id="video" playsinline muted style="display:none;"></video>
         </div>
 
-        <button id="downloadBtn" class="btn" style="background:#00c853; display:none;">📥 カメラロールへ保存（音声入り）</button>
+        <button id="replayBtn" class="btn">🔄 もう一度再生する</button>
+        <button id="downloadBtn" class="btn">📥 音声入り動画を保存（カメラロール）</button>
     </div>
 
     <script type="module">
@@ -46,13 +51,14 @@
         const fileInput = document.getElementById('fileInput');
         const uploadBtn = document.getElementById('uploadBtn');
         const downloadBtn = document.getElementById('downloadBtn');
+        const replayBtn = document.getElementById('replayBtn');
         const progressBox = document.getElementById('progressBox');
         const progressFill = document.getElementById('progressFill');
         const progressLabel = document.getElementById('progressLabel');
         const logArea = document.getElementById('log');
 
         let faceLandmarker, muzzleImg = new Image(); muzzleImg.src = "muzzle.png"; 
-        let frameSequence = []; 
+        let frameData = [], isLooping = false, isExporting = false, audioCtx, audioSource, audioDest;
         const SCAN_FPS = 12;
 
         function addLog(msg) { logArea.innerText += `> ${msg}\n`; logArea.scrollTop = logArea.scrollHeight; }
@@ -61,10 +67,10 @@
             try {
                 const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm");
                 faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
-                    baseOptions: { modelAssetPath: `./models/face_landmarker.task`, delegate: "GPU" },
+                    baseOptions: { modelAssetPath: `./models/face_landmarker.task`, delegate: "CPU" },
                     runningMode: "IMAGE", numFaces: 1, minFaceDetectionConfidence: 0.1
                 });
-                addLog("準備完了。物理制約スムージング有効。");
+                addLog("システム準備完了。");
                 uploadBtn.disabled = false; uploadBtn.innerText = "動画を選択して解析開始";
                 uploadBtn.onclick = () => fileInput.click();
             } catch (e) { addLog("初期化失敗: " + e.message); }
@@ -73,34 +79,36 @@
         fileInput.onchange = (e) => {
             const file = e.target.files[0];
             if (!file) return;
-            downloadBtn.style.display = "none";
-            startStableSmoothScan(URL.createObjectURL(file));
+            downloadBtn.style.display = "none"; replayBtn.style.display = "none";
+            startDeepAnalysis(URL.createObjectURL(file));
         };
 
-        // --- 1. ゴールデン・アンカー解析プロセス ---
-        async function startStableSmoothScan(url) {
-            addLog("手順1: 動画の最後から『正解の場所』を特定します...");
+        // --- 1. 高精度・絶対に止まらない解析プロセス ---
+        async function startDeepAnalysis(url) {
+            addLog("手順1: 成功地点の特定中...");
             video.src = url; video.load();
             video.onloadedmetadata = async () => {
                 canvas.width = video.videoWidth; canvas.height = video.videoHeight;
-                frameSequence = []; progressBox.style.display = "block";
+                frameData = []; progressBox.style.display = "block";
                 
-                // 最後からアンカー取得
                 let goldenAnchors = [null, null];
-                for (let t = video.duration - 0.1; t > 0; t -= 0.4) {
+                // 最後から5秒間遡ってアンカーを探す
+                for (let t = video.duration - 0.1; t > 0; t -= 0.5) {
                     video.currentTime = t;
-                    await new Promise(r => video.onseeked = r);
+                    const seekOk = await waitVideoSeekSafe();
+                    if (!seekOk) continue;
                     const res = faceLandmarker.detect(video);
-                    if (res.faceLandmarks && res.faceLandmarks.length >= 2) {
+                    if (res.faceLandmarks && res.faceLandmarks.length >= 1) {
                         const sorted = [...res.faceLandmarks].sort((a,b) => a[4].x - b[4].x);
                         goldenAnchors = sorted.map(lm => ({ x: lm[4].x, y: lm[4].y }));
-                        addLog("二人の位置をロックオンしました。");
+                        addLog("顔の位置を特定しました。");
                         break;
                     }
+                    if (t < video.duration - 5) break;
                 }
                 if (!goldenAnchors[0]) goldenAnchors = [{x:0.3, y:0.5}, {x:0.7, y:0.5}];
 
-                addLog("手順2: アンカー周辺をズーム解析し、光量を補正します...");
+                addLog("手順2: アンカーズーム解析中...");
                 const zCanvas = document.createElement('canvas'); zCanvas.width = 640; zCanvas.height = 640;
                 const zCtx = zCanvas.getContext('2d');
                 const totalSteps = Math.floor(video.duration * SCAN_FPS);
@@ -108,94 +116,65 @@
                 for (let i = 0; i <= totalSteps; i++) {
                     const ts = i / SCAN_FPS;
                     video.currentTime = ts;
-                    await new Promise(r => { video.onseeked = r; setTimeout(r, 800); });
-                    await new Promise(r => requestAnimationFrame(r));
+                    
+                    const seekOk = await waitVideoSeekSafe();
+                    // シーク後、さらにブラウザに描画させる時間を明示的に与える
+                    await new Promise(r => setTimeout(r, 20)); 
 
                     let foundInFrame = [];
-                    for (let id = 0; id < 2; id++) {
-                        const anchor = goldenAnchors[id];
-                        const rw = canvas.width * 0.45, rh = canvas.height * 0.55;
-                        const rx = Math.max(0, Math.min(canvas.width - rw, anchor.x * canvas.width - rw/2));
-                        const ry = Math.max(0, Math.min(canvas.height - rh, anchor.y * canvas.height - rh/2));
-
-                        zCtx.clearRect(0,0,640,640);
-                        zCtx.filter = "brightness(1.4) contrast(1.7)";
-                        zCtx.drawImage(video, rx, ry, rw, rh, 0, 0, 640, 640);
-
-                        const results = faceLandmarker.detect(zCanvas);
-                        if (results.faceLandmarks && results.faceLandmarks[0]) {
-                            let f = extractMetrics(results.faceLandmarks[0]);
-                            f.px = rx + (f.nx_local * rw); f.py = ry + (f.ny_local * rh);
-                            f.pScale = f.s_local * rw; f.lane = id;
-                            foundInFrame.push(f);
-                        }
+                    if (seekOk) {
+                        try {
+                            for (let id = 0; id < 2; id++) {
+                                const anchor = goldenAnchors[id];
+                                const rw = canvas.width * 0.45, rh = canvas.height * 0.55;
+                                const rx = Math.max(0, Math.min(canvas.width - rw, anchor.x * canvas.width - rw/2));
+                                const ry = Math.max(0, Math.min(canvas.height - rh, anchor.y * canvas.height - rh/2));
+                                zCtx.clearRect(0,0,640,640);
+                                zCtx.filter = "brightness(1.3) contrast(1.6)";
+                                zCtx.drawImage(video, rx, ry, rw, rh, 0, 0, 640, 640);
+                                const results = faceLandmarker.detect(zCanvas);
+                                if (results.faceLandmarks && results.faceLandmarks[0]) {
+                                    let f = extractMetrics(results.faceLandmarks[0]);
+                                    f.px = rx + (f.nx_local * rw); f.py = ry + (f.ny_local * rh);
+                                    f.pScale = f.s_local * rw; f.lane = id;
+                                    foundInFrame.push(f);
+                                }
+                            }
+                        } catch(e) { /* フレーム単位のエラーは無視して次に進む */ }
                     }
-                    frameSequence.push({ time: ts, faces: foundInFrame });
-                    progressFill.style.width = Math.floor((i / totalSteps) * 100) + "%";
+
+                    frameData.push({ time: ts, faces: foundInFrame });
+                    const percent = Math.floor((i / totalSteps) * 100);
+                    progressFill.style.width = percent + "%";
+                    progressLabel.innerText = `解析中: ${percent}% (${i}/${totalSteps})`;
                 }
 
-                finalizeSmoothTracks();
-                addLog("全解析完了。");
+                finalizeTracks();
+                addLog("解析完了！プレビューを生成します。");
                 progressBox.style.display = "none"; downloadBtn.style.display = "block";
-                video.currentTime = 0; video.play();
-                requestAnimationFrame(liveLoop);
+                startPlayback();
             };
         }
 
-        // --- 2. 角速度制限スムージング ＋ 補間 ---
-        function finalizeSmoothTracks() {
-            let tracks = [[], []]; let lastData = [null, null];
-
-            frameSequence.forEach((frame, idx) => {
-                let assigned = [null, null];
-                frame.faces.forEach(f => { if (!assigned[f.lane]) assigned[f.lane] = f; });
-
-                for(let id=0; id<2; id++) {
-                    let f = assigned[id];
-                    let prev = lastData[id];
-
-                    if (f && prev) {
-                        // 物理制約：急激な回転やピッチの変化を制限 (maxDelta)
-                        f.yaw = smoothValue(prev.yaw, f.yaw, 0.08);
-                        f.pitch = smoothValue(prev.pitch, f.pitch, 0.08);
-                        f.angle = smoothAngle(prev.angle, f.angle, 0.12);
-                    }
-
-                    if (!f && prev && prev.life > 0) {
-                        assigned[id] = { ...prev, life: prev.life - 1, isGhost: true };
-                    } else if (f) {
-                        f.life = 180; f.isGhost = false;
-                    }
-                    tracks[id].push(assigned[id]);
-                    if (assigned[id]) lastData[id] = assigned[id];
+        // シーク待機の核心（タイムアウト付き）
+        async function waitVideoSeekSafe() {
+            return new Promise(resolve => {
+                const timeout = setTimeout(() => {
+                    resolve(video.readyState >= 2); // 1秒経ったらその時の状態で次へ
+                }, 1000);
+                const onSeeked = () => {
+                    clearTimeout(timeout);
+                    video.removeEventListener('seeked', onSeeked);
+                    resolve(true);
+                };
+                video.addEventListener('seeked', onSeeked);
+                // すでに完了している場合
+                if (video.readyState >= 3) {
+                    clearTimeout(timeout);
+                    video.removeEventListener('seeked', onSeeked);
+                    resolve(true);
                 }
             });
-
-            // 欠損補間
-            tracks.forEach(track => {
-                for (let i = 1; i < track.length - 1; i++) {
-                    if (!track[i]) {
-                        let p = i - 1; while(p >= 0 && !track[p]) p--;
-                        let n = i + 1; while(n < track.length && !track[n]) n++;
-                        if (p >= 0 && n < track.length && (n - p) < 180) {
-                            track[i] = lerpPro(track[p], track[n], (i - p) / (n - p));
-                        }
-                    }
-                }
-            });
-            frameSequence.forEach((f, i) => f.optimizedFaces = [tracks[0][i], tracks[1][i]]);
-        }
-
-        function smoothValue(prev, curr, maxDelta) {
-            const d = curr - prev;
-            return prev + Math.max(-maxDelta, Math.min(maxDelta, d));
-        }
-
-        function smoothAngle(prev, curr, maxDelta) {
-            let d = curr - prev;
-            while (d > Math.PI) d -= Math.PI * 2;
-            while (d < -Math.PI) d += Math.PI * 2;
-            return prev + Math.max(-maxDelta, Math.min(maxDelta, d));
         }
 
         function extractMetrics(lm) {
@@ -203,68 +182,100 @@
             return { nx_local: nx, ny_local: ny, s_local: Math.abs(lm[454].x - lm[234].x), angle: Math.atan2((lm[263].y-lm[33].y),(lm[263].x-lm[33].x)), yaw: (lm[4].x - (lm[33].x+lm[263].x)*0.5)/(Math.abs(lm[454].x-lm[234].x)*0.5||1), pitch: Math.atan2(lm[152].z-lm[4].z, lm[152].y-lm[4].y) };
         }
 
-        function lerpPro(a, b, t) {
-            let d = b.angle - a.angle; while(d > Math.PI) d -= Math.PI*2; while(d < -Math.PI) d += Math.PI*2;
-            return { px: a.px+(b.px-a.px)*t, py: a.py+(b.py-a.py)*t, pScale: a.pScale+(b.pScale-a.pScale)*t, angle: a.angle+d*t, yaw: a.yaw, pitch: a.pitch, isGhost: true };
+        function finalizeTracks() {
+            let tracks = [[], []]; let lastData = [null, null];
+            frameData.forEach((frame, idx) => {
+                let assigned = [null, null];
+                frame.faces.forEach(f => { if (!assigned[f.lane]) assigned[f.lane] = f; });
+                for(let id=0; id<2; id++) {
+                    let f = assigned[id]; let prev = lastData[id];
+                    if (f && prev) {
+                        f.yaw = prev.yaw + Math.max(-0.08, Math.min(0.08, f.yaw-prev.yaw));
+                        f.pitch = prev.pitch + Math.max(-0.08, Math.min(0.08, f.pitch-prev.pitch));
+                        let dAng = f.angle - prev.angle;
+                        while (dAng > Math.PI) dAng -= Math.PI * 2; while (dAng < -Math.PI) dAng += Math.PI * 2;
+                        f.angle = prev.angle + Math.max(-0.12, Math.min(0.12, dAng));
+                    }
+                    if (!f && prev && prev.life > 0) assigned[id] = { ...prev, life: prev.life - 1, isGhost: true };
+                    else if (f) { f.life = 120; f.isGhost = false; }
+                    tracks[id].push(assigned[id]); if (assigned[id]) lastData[id] = assigned[id];
+                }
+            });
+            tracks.forEach(track => {
+                for (let i = 1; i < track.length - 1; i++) {
+                    if (!track[i]) {
+                        let p = i - 1; while(p >= 0 && !track[p]) p--;
+                        let n = i + 1; while(n < track.length && !track[n]) n++;
+                        if (track[p] && track[n] && (n-p)<150) track[i] = lerpPro(track[p], track[n], (i-p)/(n-p));
+                    }
+                }
+            });
+            frameData.forEach((f, i) => f.optimizedFaces = [tracks[0][i], tracks[1][i]]);
         }
+        function lerpPro(a,b,t) { return { px: a.px+(b.px-a.px)*t, py: a.py+(b.py-a.py)*t, pScale: a.pScale+(b.pScale-a.pScale)*t, angle: a.angle, yaw: a.yaw, pitch: a.pitch, isGhost: true }; }
+
+        function startPlayback() { video.currentTime = 0; video.play(); isLooping = true; requestAnimationFrame(liveLoop); }
+        video.onended = () => { isLooping = false; replayBtn.style.display = "block"; };
+        replayBtn.onclick = () => { replayBtn.style.display = "none"; startPlayback(); };
 
         function liveLoop() {
+            if (!isLooping || isExporting) return;
             ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-            const frame = frameSequence.find(f => f.time >= video.currentTime) || frameSequence[frameSequence.length-1];
+            const frame = frameData.find(f => f.time >= video.currentTime) || frameData[frameData.length-1];
             if (frame) frame.optimizedFaces.forEach(face => { if (face) drawFinalMuzzle(face); });
-            if (!video.paused && !video.ended) requestAnimationFrame(liveLoop);
+            requestAnimationFrame(liveLoop);
         }
 
         function drawFinalMuzzle(f) {
             const px = f.px, py = f.py;
             const aspect = muzzleImg.width / muzzleImg.height;
             const yaw = Math.max(-1.2, Math.min(1.2, f.yaw));
-            const baseSizePx = f.pScale * 0.95;
-            const sxL = 1 - Math.max(0, -yaw)*0.55, sxR = 1 - Math.max(0, yaw)*0.55;
-            const scaleY = (1 - Math.abs(yaw) * 0.15) * (1.0 + (f.pitch - 0.5) * 0.35);
-            const dw = baseSizePx, dh = dw / aspect;
-
+            const dw = f.pScale * 0.95, dh = dw / aspect;
+            const sxL = 1-Math.max(0,-yaw)*0.55, sxR = 1-Math.max(0,yaw)*0.55;
+            const scaleY = (1-Math.abs(yaw)*0.15)*(1+(f.pitch-0.5)*0.35);
             ctx.save();
-            ctx.translate(px + yaw * dw * 0.16, py); ctx.rotate(f.angle || 0);
+            ctx.translate(px + yaw * dw * 0.16, py); ctx.rotate(f.angle);
             ctx.globalAlpha = 1.0; 
             const imgW = muzzleImg.width, imgH = muzzleImg.height;
-            ctx.save(); ctx.scale(sxL, scaleY);
-            ctx.drawImage(muzzleImg, 0, 0, imgW/2, imgH, -dw/2, -dh/2 + (dh*0.1), dw/2, dh);
-            ctx.restore();
-            ctx.save(); ctx.scale(sxR, scaleY);
-            ctx.drawImage(muzzleImg, imgW/2, 0, imgW/2, imgH, 0, -dh/2 + (dh*0.1), dw/2, dh);
-            ctx.restore();
+            ctx.save(); ctx.scale(sxL, scaleY); ctx.drawImage(muzzleImg, 0,0,imgW/2,imgH, -dw/2,-dh/2+(dh*0.1), dw/2,dh); ctx.restore();
+            ctx.save(); ctx.scale(sxR, scaleY); ctx.drawImage(muzzleImg, imgW/2,0,imgW/2,imgH, 0,-dh/2+(dh*0.1), dw/2,dh); ctx.restore();
             ctx.restore();
         }
 
-        // 保存機能（オーディオ統合）
+        // 保存ロジック
         downloadBtn.onclick = async () => {
-            addLog("音声入り動画を生成中...");
-            const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-            const destination = audioCtx.createMediaStreamDestination();
-            const source = audioCtx.createMediaElementSource(video);
-            source.connect(destination); source.connect(audioCtx.destination);
-            const stream = canvas.captureStream(30);
-            const combined = new MediaStream([...stream.getVideoTracks(), ...destination.stream.getAudioTracks()]);
+            addLog("実時間で書き出し中... 再生が終わるまでお待ちください。");
+            downloadBtn.disabled = true; isExporting = true; isLooping = false;
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                audioDest = audioCtx.createMediaStreamDestination();
+                audioSource = audioCtx.createMediaElementSource(video);
+                audioSource.connect(audioDest); audioSource.connect(audioCtx.destination);
+            }
+            await audioCtx.resume();
+            const combined = new MediaStream([...canvas.captureStream(30).getVideoTracks(), ...audioDest.stream.getAudioTracks()]);
             const recorder = new MediaRecorder(combined, { mimeType: 'video/webm;codecs=vp9', videoBitsPerSecond: 12000000 });
             const chunks = [];
-            recorder.ondataavailable = e => chunks.push(e.data);
+            recorder.ondataavailable = e => { if(e.data.size > 0) chunks.push(e.data); };
             recorder.onstop = async () => {
-                const blob = new Blob(chunks, {type:'video/webm'});
-                const file = new File([blob], "cat_muzzle.mp4", {type:"video/mp4"});
+                const blob = new Blob(chunks, { type: 'video/webm' });
+                const file = new File([blob], "cat_muzzle.mp4", { type: "video/mp4" });
                 if (navigator.share) await navigator.share({ files: [file] });
                 else { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = "result.mp4"; a.click(); }
-                addLog("保存完了！");
+                addLog("保存完了！"); downloadBtn.disabled = false; isExporting = false;
             };
             video.currentTime = 0; video.muted = false; recorder.start(); video.play();
-            const exportRender = () => {
+            const exportProcess = () => {
+                if (!isExporting) return;
                 ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-                const frame = frameSequence.find(f => f.time >= video.currentTime) || frameSequence[frameSequence.length-1];
+                const frame = frameData.find(f => f.time >= video.currentTime) || frameData[frameData.length-1];
                 if (frame) frame.optimizedFaces.forEach(face => { if (face) drawFinalMuzzle(face); });
-                if (video.ended) setTimeout(() => recorder.stop(), 500); else requestAnimationFrame(exportRender);
+                if (video.ended) setTimeout(() => recorder.stop(), 500); else requestAnimationFrame(exportProcess);
             };
-            exportRender();
+            exportProcess();
         };
+
+        async function processImage(url) { /* 画像処理 */ }
 
         init();
     </script>
